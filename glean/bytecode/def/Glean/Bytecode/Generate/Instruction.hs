@@ -327,9 +327,7 @@ instructions =
     -- Adjust PC to point to 'cont' and suspend execution. The first argument
     -- is a temporary, unused left-over for backwards compatibility.
   , Insn "Suspend" [EndBlock, Return] []
-      [ Arg "unused" $ reg Word Load
-      , Arg "cont" $ Imm ImmOffset
-      ]
+      [ Arg "cont" $ Imm ImmOffset ]
 
     -- Return from a subroutine.
   , Insn "Ret" [EndBlock, Return] [] []

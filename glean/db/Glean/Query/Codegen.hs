@@ -473,7 +473,7 @@ compileQuery bounds (QueryWithInfo query numVars ty) = do
       return (idTerm, resultKey, resultValue, stmts)
     _other -> throwIO $ BadQuery "unsupported query"
 
-  sub <- generateQueryCode $ \ regs@QueryRegs{..} -> do
+  sub <- generateQueryCode $ \ QueryRegs{..} -> do
 
     let outputVars = IntSet.toList $ findOutputs query
     output $ Many (length outputVars) $ \outputRegs -> do
@@ -492,7 +492,7 @@ compileQuery bounds (QueryWithInfo query numVars ty) = do
 
     -- resultKeyReg/resultValueReg is where we build up result values
     output $ \resultKeyOutput resultValueOutput ->
-      compileStatements bounds regs stmts vars $ mdo
+      compileStatements bounds stmts vars $ mdo
         -- If the result term is a variable, avoid unnecessarily
         -- copying it into resultOutput and just use it directly.
         resultKeyReg <- case resultKey of
@@ -682,9 +682,8 @@ compileTermGen term vars maybeReg andThen = do
     andThen
 
 compileStatements
-  :: forall a s
+  :: forall a
   .  Boundaries
-  -> QueryRegs s
   -> [CgStatement]
   -> Vector (Register 'Word)    -- ^ registers for variables
   -> Code a                     -- ^ @andThen@: code to insert after
@@ -692,7 +691,6 @@ compileStatements
   -> Code a
 compileStatements
   bounds
-  regs@(QueryRegs{..} :: QueryRegs s)
   stmts
   vars
   andThen =
@@ -704,7 +702,7 @@ compileStatements
         local $ \failed innerRet -> mdo
           let
             compileBranch stmts =
-              compileStatements bounds regs stmts vars $ mdo
+              compileStatements bounds stmts vars $ mdo
                 site <- callSite
                 loadLabel ret innerRet
                 jump doInner
@@ -713,7 +711,7 @@ compileStatements
 
           -- if
           loadConst 1 failed
-          thenSite <- compileStatements bounds regs cond vars $ do
+          thenSite <- compileStatements bounds cond vars $ do
           -- then
             loadConst 0 failed
             compileBranch then_
@@ -768,7 +766,7 @@ compileStatements
           matches p = foldMap pure p
 
       compile (CgNegation stmts : rest) = mdo
-        singleResult (compileStatements bounds regs stmts vars) $ jump fail
+        singleResult (compileStatements bounds stmts vars) $ jump fail
         a <- compile rest
         fail <- label
         return a
@@ -797,7 +795,7 @@ compileStatements
       compile (CgDisjunction stmtss : rest) =
         local $ \innerRet -> mdo
         sites <- forM stmtss $ \stmts -> do
-          compileStatements bounds regs stmts vars $ mdo
+          compileStatements bounds stmts vars $ mdo
             site <- callSite
             loadLabel ret_ innerRet
             jump doInner
@@ -1047,7 +1045,7 @@ compileStatements
 
       compileGen
         (FactGenerator (PidRef pid _) kpat vpat range) maybeReg inner = do
-        compileFactGenerator bounds regs vars pid kpat vpat range maybeReg inner
+        compileFactGenerator bounds vars pid kpat vpat range maybeReg inner
 
 
       -- Perform an action but interrupt it and clean-up after the first result.
@@ -1065,9 +1063,8 @@ compileStatements
           return a
 
 compileFactGenerator
-  :: forall a s
+  :: forall a
   .  Boundaries
-  -> QueryRegs s
   -> Vector (Register 'Word)    -- ^ registers for variables
   -> Pid
   -> Pat
@@ -1076,8 +1073,7 @@ compileFactGenerator
   -> Maybe (Register 'Word)
   -> Code a
   -> Code a
-compileFactGenerator bounds (QueryRegs{..} :: QueryRegs s)
-    vars pid kpat vpat section maybeReg inner =
+compileFactGenerator bounds vars pid kpat vpat section maybeReg inner =
 
   local $ \seekTok prefix_size -> do
 
@@ -1619,7 +1615,7 @@ compileQueryFacts facts = do
           if factQuery_recursive then 1 else 0 :: Word64)
       | FactQuery{..} <- facts ]
     finishBuilder builder
-  sub <- generateQueryCode $ \ QueryRegs{..} ->
+  sub <- generateQueryCode $ const $
     output $ \kout vout -> local $ \fid pid rec_ ptr end -> do
       loadLiteral input ptr end
       local $ inputNat ptr end -- ignore the size

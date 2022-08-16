@@ -54,7 +54,7 @@ data ArgTy
   = Imm ImmTy -- ^ immediate value in instruction stream
   | Reg (Maybe Text) Ty Usage -- ^ register argument
   | Offsets -- ^ array of jump offsets (length + array in the insn stream)
-  | Regs [Ty] -- ^ list of registers (array without length in the insn stream)
+  | Regs -- ^ list of registers (array without length in the insn stream)
 
 -- | Type of an immediate value
 data ImmTy
@@ -301,60 +301,10 @@ instructions =
       [ Arg "reg" $ reg Word Update
       , Arg "tgt" $ Imm ImmOffset ]
 
-  , Insn "CallFun_0_1" [] []
-      [ Arg "fun" $ reg (Fun [WordPtr]) Load
-      , Arg "args" $ Regs [Word] ]
-
-  , Insn "CallFun_0_2" [] []
-      [ Arg "fun" $ reg (Fun [WordPtr, WordPtr]) Load
-      , Arg "args" $ Regs [Word,Word] ]
-
-  , Insn "CallFun_1_1" [] []
-      [ Arg "fun" $ reg (Fun [Word, WordPtr]) Load
-      , Arg "args" $ Regs [Word,Word] ]
-
-  , Insn "CallFun_1_0" [] []
-      [ Arg "fun" $ reg (Fun [Word]) Load
-      , Arg "args" $ Regs [Word] ]
-
-    -- Call an std::function which takes two 64-bit arguments and returns
-    -- one 64-bit result.
-  , Insn "CallFun_2_1" [] []
-      [ Arg "fun" $ reg (Fun [Word,Word,WordPtr]) Load
-      , Arg "args" $ Regs [Word,Word,Word] ]
-
-  , Insn "CallFun_2_0" [] []
-      [ Arg "fun" $ reg (Fun [Word,Word]) Load
-      , Arg "args" $ Regs [Word,Word] ]
-
-  , Insn "CallFun_3_0" [] []
-      [ Arg "fun" $ reg (Fun [Word,Word,Word]) Load
-      , Arg "args" $ Regs [Word,Word,Word] ]
-
-  , Insn "CallFun_4_0" [] []
-      [ Arg "fun" $ reg (Fun [Word,Word,Word,Word]) Load
-      , Arg "args" $ Regs [Word,Word,Word,Word] ]
-
-  , Insn "CallFun_3_1" [] []
-      [ Arg "fun" $ reg (Fun [Word,Word,Word,WordPtr]) Load
-      , Arg "args" $ Regs [Word,Word,Word,Word] ]
-
-  , Insn "CallFun_5_0" [] []
-      [ Arg "fun" $ reg (Fun [Word,Word,Word,Word,Word]) Load
-      , Arg "args" $ Regs [Word,Word,Word,Word,Word] ]
-
-  , Insn "CallFun_5_1" [] []
-      [ Arg "fun" $ reg (Fun [Word,Word,Word,Word,Word,WordPtr]) Load
-      , Arg "args" $ Regs [Word,Word,Word,Word,Word,Word] ]
-
-  , Insn "CallFun_2_2" [] []
-      [ Arg "fun" $ reg (Fun [Word,Word,WordPtr,WordPtr]) Load
-      , Arg "args" $ Regs [Word,Word,Word,Word] ]
-
-  , Insn "CallFun_2_5" [] []
-      [ Arg "fun"
-          $ reg (Fun [Word,Word,WordPtr,WordPtr,WordPtr,WordPtr,WordPtr]) Load
-      , Arg "args" $ Regs [Word,Word,Word,Word,Word,Word,Word] ]
+  , Insn "SysCall" [] []
+      [ Arg "num" $ Imm ImmWord
+      , Arg "args" Regs
+      ]
 
     -- Indexed jump - the register contains an index into the array of
     -- offsets. Does nothing if the index is out of range.

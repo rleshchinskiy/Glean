@@ -115,9 +115,8 @@ genInsnEval Insn{..} =
     declare (Arg name Offsets) =
       [ "uint64_t " <> name <> "_size;"
       , "const uint64_t *" <> name <> ";" ]
-    declare (Arg name (Regs tys))  =
-      [ "static constexpr uint64_t " <> name <> "_arity = "
-          <> Text.pack (show (length tys) <> ";")
+    declare (Arg name Regs) =
+      [ "uint64_t " <> name <> "_size;"
       , "const uint64_t *" <> name <> ";" ]
 
     decode (Arg name (Imm ImmLit)) =
@@ -132,16 +131,16 @@ genInsnEval Insn{..} =
       [ "args." <> name <> "_size = *pc++;"
       , "args." <> name <> " = pc;"
       , "pc += args." <> name <> "_size;" ]
-    decode (Arg name (Regs _)) =
-      [ "args." <> name <> " = pc;"
-      , "pc += args." <> name <> "_arity;" ]
+    decode (Arg name Regs) =
+      [ "args." <> name <> "_size = *pc++;"
+      , "args." <> name <> " = pc;"
+      , "pc += args." <> name <> "_size;" ]
 
 cppType :: Ty -> Text
 cppType DataPtr = "const unsigned char *"
 cppType Lit = "const std::string *"
 cppType WordPtr = "uint64_t *"
 cppType BinaryOutputPtr = "binary::Output *"
-cppType (Fun _) = "SysFun"
 cppType _ = "uint64_t"
 
 immType :: ImmTy -> Text

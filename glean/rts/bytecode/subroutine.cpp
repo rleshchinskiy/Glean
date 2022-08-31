@@ -109,8 +109,8 @@ struct Eval {
     a.dst << a.output->size();
   }
 
-  FOLLY_ALWAYS_INLINE void execute(LoadI32 a) {
-    a.dst << a.imm;
+  FOLLY_ALWAYS_INLINE void execute(MoveI32 a) {
+    a.dst << a.i32;
   }
 
   FOLLY_ALWAYS_INLINE void execute(LoadLiteral a) {
@@ -123,23 +123,15 @@ struct Eval {
     a.dst << a.src;
   }
 
-  FOLLY_ALWAYS_INLINE void execute(SubConst a) {
-    a.dst << *a.dst - a.imm;
-  }
-
-  FOLLY_ALWAYS_INLINE void execute(AddConst a) {
-    a.dst << *a.dst + a.imm;
-  }
-
-  FOLLY_ALWAYS_INLINE void execute(Sub a) {
-    a.dst << *a.dst - a.src;
+  FOLLY_ALWAYS_INLINE void execute(AddI32 a) {
+    a.dst << a.src + a.i32;
   }
 
   FOLLY_ALWAYS_INLINE void execute(Add a) {
-    a.dst << *a.dst + a.src;
+    a.dst << a.src2 + a.src1;
   }
 
-  FOLLY_ALWAYS_INLINE void execute(PtrDiff a) {
+  FOLLY_ALWAYS_INLINE void execute(Sub a) {
     a.dst << a.src2 - a.src1;
   }
 

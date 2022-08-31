@@ -10,6 +10,7 @@ module Glean.Bytecode.Types
   ( Ty(..)
   , Ordered
   , Addable
+  , Subable(..)
   , Register(..)
   , Label(..)
   , Literal(..)
@@ -38,6 +39,16 @@ instance Ordered 'DataPtr
 class Addable (t :: Ty) (u :: Ty)
 instance Addable 'Word 'Word
 instance Addable 'DataPtr 'Word
+
+class Subable (a :: Ty) (b :: Ty) where
+  type Difference a b :: Ty
+
+instance Subable 'Word 'Word where
+  type Difference 'Word 'Word = 'Word
+instance Subable 'DataPtr 'Word where
+  type Difference 'DataPtr 'Word = 'DataPtr
+instance Subable 'DataPtr 'DataPtr where
+  type Difference 'DataPtr 'DataPtr = 'Word
 
 -- | Typed registers
 newtype Register (ty :: Ty) = Register { fromRegister :: Word64 }

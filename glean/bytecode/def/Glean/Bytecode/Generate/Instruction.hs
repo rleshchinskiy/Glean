@@ -105,8 +105,36 @@ lowestSupportedVersion = 7
 instructions :: [Insn]
 instructions =
   [
+    -- Copy a register into another one.
+    Insn "Move" [] []
+      [ Arg "src" $ polyReg "a" Word Load
+      , Arg "dst" $ polyReg "a" Word Store ]
+
+    -- Write a constant into a register.
+  , Insn "MoveI32" [] []
+      [ Arg "i32" $ Imm I32
+      , Arg "dst" $ reg Word Store ]
+
+    -- Add a register to another register
+  , Insn "Add" [] ["Addable a b"]
+      [ Arg "src1" $ polyReg "b" Word Load
+      , Arg "src2" $ polyReg "a" Word Load
+      , Arg "dst" $ polyReg "a" Word Store ]
+
+    -- Add a constant to a register.
+  , Insn "AddI32" [] ["Addable a 'Word"]
+      [ Arg "i32" $ Imm I32
+      , Arg "src" $ polyReg "a" Word Load
+      , Arg "dst" $ polyReg "a" Word Store ]
+
+    -- Subtract a register from a register.
+  , Insn "Sub" [] ["Subable a b"]
+      [ Arg "src1" $ polyReg "b" Word Load
+      , Arg "src2" $ polyReg "a" Word Load
+      , Arg "dst" $ polyReg "(Difference a b)" Word Store ]
+
     -- Decode a Nat from memory into a register.
-    Insn "InputNat" [] []
+  , Insn "InputNat" [] []
       [ Arg "begin" $ reg DataPtr Update
       , Arg "end" $ reg DataPtr Load
       , Arg "dst" $ reg Word Store ]
@@ -198,47 +226,11 @@ instructions =
       [ Arg "output" $ reg BinaryOutputPtr Load
       , Arg "dst" $ reg Word Store ]
 
-    -- Write a constant into a register.
-  , Insn "LoadI32" [] []
-      [ Arg "imm" $ Imm I32
-      , Arg "dst" $ reg Word Store ]
-
     -- Load the address and size of a literal
   , Insn "LoadLiteral" [] []
       [ Arg "lit" $ Imm ImmLit
       , Arg "ptr" $ reg DataPtr Store
       , Arg "end" $ reg DataPtr Store ]
-
-    -- Copy a register into another one.
-  , Insn "Move" [] []
-      [ Arg "src" $ polyReg "a" Word Load
-      , Arg "dst" $ polyReg "a" Word Store ]
-
-    -- Subtract a constant from a register.
-  , Insn "SubConst" [] []
-      [ Arg "imm" $ Imm U32
-      , Arg "dst" $ reg Word Update ]
-
-    -- Subtract a register from a register.
-  , Insn "Sub" [] ["Addable a b"]
-      [ Arg "src" $ polyReg "b" Word Load
-      , Arg "dst" $ polyReg "a" Word Update ]
-
-    -- Add a constant to a register.
-  , Insn "AddConst" [] ["Addable a 'Word"]
-      [ Arg "imm" $ Imm U32
-      , Arg "dst" $ polyReg "a" Word Update ]
-
-    -- Add a register to another register
-  , Insn "Add" [] ["Addable a b"]
-      [ Arg "src" $ polyReg "b" Word Load
-      , Arg "dst" $ polyReg "a" Word Update ]
-
-    -- Subtract pointers
-  , Insn "PtrDiff" [] []
-      [ Arg "src1" $ reg DataPtr Load
-      , Arg "src2" $ reg DataPtr Load
-      , Arg "dst" $ reg Word Store ]
 
   , Insn "LoadLabel" [] []
       [ Arg "lbl" $ Imm ImmOffset

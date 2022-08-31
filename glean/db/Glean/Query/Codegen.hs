@@ -526,7 +526,7 @@ compileQuery bounds (QueryWithInfo query numVars ty) = do
           -- have to backtrack and regenerate the most recent result
           -- again in the continuation.
           jumpIfGt len maxBytes pause
-          sub len maxBytes
+          sub len maxBytes maxBytes
           jump continue
           pause <- label
           suspend continue -- see Note [pausing/resuming queries]
@@ -941,8 +941,7 @@ compileStatements
       compileGen (PrimCall PrimOpAddNat [p, q]) (Just reg) inner =
         withNatTerm vars p $ \a ->
           withNatTerm vars q $ \b -> do
-            move a reg
-            add b reg
+            add a b reg
             inner
       compileGen (PrimCall PrimOpToLower [arg]) (Just reg) inner =
         withTerm vars arg $ \str -> do
@@ -972,14 +971,14 @@ compileStatements
           local $ \len off -> mdo
             local $ \ptr end -> do
               getOutput array ptr end
-              ptrDiff ptr end len
+              sub ptr end len
               local $ \start -> do
                 move ptr start
                 -- the number of elements is useless to us, since we need
                 -- to traverse the array linearly. We'll use the length
                 -- to know when we've reached the end.
                 inputSkipNat ptr end
-                ptrDiff start ptr off
+                sub start ptr off
             jumpIfEq off len done
 
             loop <- label
@@ -990,8 +989,8 @@ compileStatements
             -- value in the 'off' register.
             local $ \ptr end -> do
               getOutput array ptr end
-              ptrDiff ptr end len
-              add off ptr
+              sub ptr end len
+              add off ptr ptr
               local $ \start size -> do
                 -- really want to just matchPat here
                 move ptr start
@@ -1001,8 +1000,8 @@ compileStatements
                   skipTrusted ptr end eltTy
                   resetOutput (castRegister reg)
                   outputBytes start ptr (castRegister reg)
-                ptrDiff start ptr size
-                add size off
+                sub start ptr size
+                add size off off
             a <- inner
             jumpIfLt off len loop
             done <- label
@@ -1153,7 +1152,7 @@ compileFactGenerator bounds vars pid kpat vpat section maybeReg inner =
   typ <- constant (fromIntegral (fromPid pid))
   local $ \ptr ptrend -> do
     loadPrefix ptr ptrend
-    when hasPrefix $ ptrDiff ptr ptrend prefix_size
+    when hasPrefix $ sub ptr ptrend prefix_size
     seek' typ ptr ptrend seekTok
 
   -- for each fact...
@@ -1182,7 +1181,7 @@ compileFactGenerator bounds vars pid kpat vpat section maybeReg inner =
       when (isJust captureKey) $ move clause saveclause
 
       -- skip the prefix
-      when hasPrefix $ add prefix_size clause
+      when hasPrefix $ add prefix_size clause clause
 
       -- check that the rest of the key matches the pattern
       matchPat vars clause keyend loop remaining
@@ -1472,7 +1471,7 @@ outputNatConst w r
 
 loadConst :: Word64 -> Register 'Word -> Code ()
 loadConst w r
-  | fromIntegral i == w = loadI32 i r
+  | fromIntegral i == w = moveI32 i r
   | otherwise = do
       c <- constant w
       move c r
@@ -1601,7 +1600,7 @@ matchPat vars input inputend fail chunks = do
       mapM_isLast isLast match patterns
       -- skip to the end unless we are fully done matching
       unless isLast $ mdo
-          sub patternsLen size
+          sub patternsLen size size
           jumpIf0 size done
           skip <- label
           skipTrusted input inputend ty

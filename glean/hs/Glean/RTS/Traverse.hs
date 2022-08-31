@@ -39,13 +39,13 @@ traversal input inputend ty = go False (repType ty)
     -- If refs is False, we *must not* traverse the value unless
     -- (hasRefs ty) is True, because we might not have traversed the
     -- previous value.
-    go refs ByteRep = when refs $ addConst 1 input
+    go refs ByteRep = when refs $ addI32 1 input input
     go refs NatRep = when refs $ inputSkipNat input inputend
     go refs StringRep = when refs $ inputSkipTrustedString input inputend
     go refs (ArrayRep elty) = when (refs || hasRefs elty) $ local $ \size -> do
       inputNat input inputend size
       case elty of
-        ByteRep -> add size input
+        ByteRep -> add size input input
         _ -> mdo
           jumpIf0 size end
           loop <- label
@@ -58,7 +58,7 @@ traversal input inputend ty = go False (repType ty)
       tys
     go refs (SumRep tys)
       | all isUnit tys = when refs $ if length tys <= 127
-          then addConst 1 input
+          then addI32 1 input input
           else inputSkipNat input inputend
       | otherwise = when (refs || any hasRefs tys) $ mdo
           local $ \sel -> do

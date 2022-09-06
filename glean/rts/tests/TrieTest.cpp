@@ -53,11 +53,9 @@ bool operator!=(const Keys& x, const Keys& y) {
 
 void buildAndCheck(Keys keys) {
   std::vector<Fact::unique_ptr> facts;
-  for(const auto& key : keys) {
-  }
   roart::Tree tree;
-  tree.value = nullptr;
-  tree.parent = nullptr;
+  // tree.value = nullptr;
+  // tree.parent = nullptr;
 
   for (const auto& key : keys) {
     auto fact = mkfact(key);
@@ -65,36 +63,70 @@ void buildAndCheck(Keys keys) {
     facts.emplace_back(std::move(fact));
   }
 
+  LOG(INFO) << tree.stats();
+  // LOG(INFO) << tree;
+  // std::cerr << tree;
   tree.validate();
 
   std::sort(keys.begin(), keys.end());
   keys.keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
 
+  /*
   std::string buf;
   std::vector<std::string> treeKeys;
   tree.keys(buf, treeKeys);
+  */
+
+  auto treeKeys = tree.keys();
+ 
+  CHECK_EQ(keys, Keys{treeKeys});
+
+  treeKeys.clear();
+
+  for (auto i = tree.begin(); !i.done(); i.next()) {
+    treeKeys.push_back(i.getKey());
+  }
 
   CHECK_EQ(keys, Keys{treeKeys});
 }
 
 std::vector<std::string> permutes() {
   std::vector<std::string> bits{
-    "abcde", "fgh", "fij", "iiii",
+    "abcde", "fgh", "fij", "iiii", "iix",
     "a", "b", "c", "d", "e", ""
   };
 
   std::vector<std::string> results;
   for (const auto& s1 : bits) {
     for (const auto& s2 : bits) {
-      /* for (const auto& s3 : bits) {
+      for (const auto& s3 : bits) {
         for (const auto& s4 : bits) {
           results.push_back(s1+s2+s3+s4);
         }
-      } */
-      results.push_back(s1+s2);
+      }
     }
   }
   return results;
+}
+
+std::vector<std::string> x3() {
+  std::string chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+
+  std::vector<std::string> v;
+
+  for (auto c1 : chars) {
+    for (auto c2 : chars) {
+      for (auto c3 : chars) {
+        std::string s;
+        s += c1;
+        s += c2;
+        s += c3;
+        v.push_back(std::move(s));
+      } 
+    }
+  }
+
+  return v;
 }
 
 std::ostream& operator<<(std::ostream& o, const Keys& keys) {
@@ -107,8 +139,18 @@ std::ostream& operator<<(std::ostream& o, const Keys& keys) {
 }
 
 TEST(TrieTest, keys) {
+  LOG(INFO) << "*** 1";
+  buildAndCheck(Keys{});
+  LOG(INFO) << "*** 2";
+  buildAndCheck(Keys{{"a"}});
+  LOG(INFO) << "*** 3";
+  buildAndCheck(Keys{{"a","b"}});
+  LOG(INFO) << "*** 4";
   buildAndCheck(Keys{{"a","abc","adbx","adcde","cde"}});
+  LOG(INFO) << "*** 5";
   buildAndCheck(Keys{permutes()});
+  LOG(INFO) << "*** 5";
+  buildAndCheck(Keys{x3()});
 }
 
 

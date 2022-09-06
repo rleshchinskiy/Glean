@@ -10,47 +10,117 @@
 
 #include "glean/rts/fact.h"
 
+#include <folly/Memory.h>
+
 namespace facebook {
 namespace glean {
 namespace rts {
 
 namespace roart {
 
-struct Tree;
+class Tree final {
+  struct Node;
+  struct Node0;
+  struct Node4;
+  struct Node16;
+  struct Node48;
+  struct Node256;
 
-struct Node {
-  virtual ~Node() = default;
-  virtual void insert(
-    Tree *parent,
-    std::unique_ptr<Node>& ptr,
-    unsigned char byte,
-    folly::ByteRange key,
-    const Fact *f) = 0;
+  Node * FOLLY_NULLABLE root = nullptr;
 
-  virtual void keys(std::string& buf, std::vector<std::string>& v) const = 0;
+public:
+  struct Stats {
+    size_t node0 = 0;
+    size_t node4 = 0;
+    size_t node16 = 0;
+    size_t node48 = 0;
+    size_t node256 = 0;
 
-  virtual void validate() const = 0;
-};
+    size_t node4_children = 0;
+    size_t node16_children = 0;
+    size_t node48_children = 0;
+    size_t node256_children = 0;
 
-// struct Iterator;
+    size_t prefix_length = 0;
 
-struct Tree final {
-  std::string prefix;
-  const Fact * FOLLY_NULLABLE value;
+    size_t bytes = 0;
 
-  Tree *parent;
-  unsigned char byte;
-  unsigned char index;
+    size_t nodes() const { return node0 + node4 + node16 + node48 + node256; }
+  };
 
-  std::unique_ptr<Node> node;
+  struct Iterator {
+    const Node * FOLLY_NULLABLE node = nullptr;
+    std::string buf;
+    size_t prefixlen = 0;
+
+    bool done() const { return node == nullptr; }
+    const std::string& getKey() const { return buf; }
+    void next();
+
+    static Iterator leftmost(
+      const Node * FOLLY_NULLABLE node, std::string prefix);
+
+    void down(unsigned char byte, const Node *node);
+
+    bool operator==(const Iterator& other) const {
+      return node == other.node;
+    }
+
+    bool operator!=(const Iterator& other) const {
+      return node != other.node;
+    }
+  };
+
+  friend struct Iterator;
+
+  Tree() noexcept = default;
+  Tree(Tree&& other) noexcept {
+    root = other.root;
+    other.root = nullptr;
+  }
+  Tree& operator=(Tree&& other) noexcept {
+    if (this != &other) {
+      clear();
+      root = other.root;
+      other.root = nullptr;
+    }
+    return *this;
+  }
+  ~Tree() noexcept {
+    clear();
+  }
+
+  void clear() noexcept;
+
+  Iterator begin() const;
+  Iterator find(folly::ByteRange key) const;
+  Iterator lower_bound(folly::ByteRange key) const;
 
   void insert(folly::ByteRange key, const Fact *fact);
-  // Iterator seek(folly::ByteRange prefix);
 
-  void keys(std::string& buf, std::vector<std::string>& v) const;
+  std::vector<std::string> keys() const;
 
   void validate() const;
+
+  Stats stats() const;
+
+  void dump(std::ostream& s) const;
 };
+
+inline std::ostream& operator<<(std::ostream& s, const Tree& tree) {
+  tree.dump(s);
+  return s;
+}
+
+inline std::ostream& operator<<(std::ostream& s, const Tree::Stats& stats) {
+  return s << "total: " << stats.nodes()
+    << " n0: " << stats.node0
+    << " n4: " << stats.node4
+    << " n16: " << stats.node16
+    << " n48: " << stats.node48
+    << " n256: " << stats.node256
+    << " size: " << stats.bytes;
+}
 
 }
 

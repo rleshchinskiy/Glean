@@ -52,9 +52,9 @@ struct Eval {
     a.begin << input.data();
   }
 
-  FOLLY_ALWAYS_INLINE void execute(InputShiftBytes a) {
+  FOLLY_ALWAYS_INLINE void execute(InputShiftOutput a) {
     binary::Input input { *a.begin, a.end };
-    a.match << input.shift(folly::ByteRange(a.ptr, a.ptrend));
+    a.match << input.shift(a.output->bytes());
     a.begin << input.data();
   }
 

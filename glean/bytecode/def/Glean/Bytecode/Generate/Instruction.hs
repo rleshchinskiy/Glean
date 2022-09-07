@@ -124,11 +124,10 @@ instructions =
 
     -- Check that the input starts with the given byte sequence, and
     -- then skip past it
-  , Insn "InputShiftBytes" [] []
+  , Insn "InputShiftOutput" [] []
       [ Arg "begin" $ reg DataPtr Update
       , Arg "end" $ reg DataPtr Load
-      , Arg "ptr" $ reg DataPtr Load
-      , Arg "ptrend" $ reg DataPtr Load
+      , Arg "output" $ reg BinaryOutputPtr Load
       , Arg "match" $ reg Word Store ]
 
     -- Decode a Nat from memory

@@ -1541,12 +1541,9 @@ matchPat vars input inputend fail chunks = do
       jumpIfNe id (vars ! var) fail
   match _ (QueryVar (Var ty var _))
     | isEmptyTy ty = return ()
-      -- the empty tuple could be represented by a null pointer, so it's
-      -- not safe to do inputShiftBytes anyway.
-    | otherwise =
-      local $ \ptr end ok -> do
-        getOutput (castRegister (vars ! var)) ptr end
-        inputShiftBytes input inputend ptr end ok
+    | otherwise = do
+      local $ \ok -> do
+        inputShiftOutput input inputend (castRegister (vars ! var)) ok
         jumpIf0 ok fail
   match isLast (QueryAnd a b) = do
     local $ \start -> do

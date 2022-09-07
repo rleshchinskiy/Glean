@@ -38,9 +38,9 @@ import Data.Bitraversable
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as ByteString
 import Data.Coerce
+import Data.Int (Int32)
 import Data.IntSet (IntSet)
 import qualified Data.IntSet as IntSet
-import Data.List (genericLength)
 import Data.Maybe
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -1215,7 +1215,7 @@ data QueryChunk var =
 
   -- | An array prefix of length N
  | QueryArrayPrefix
-    Word64                -- ^ Length
+    Int                   -- ^ Length
     Type                  -- ^ Element type
     [QueryChunk var]      -- ^ chunks for the prefix
 
@@ -1332,7 +1332,7 @@ preProcessPat pat = unsafePerformIO $
         build rest
       Ref (MatchArrayPrefix ty prefix) -> do
         chunks <- getChunks $ mapM_ build prefix
-        chunk $ QueryArrayPrefix (genericLength chunks) ty chunks
+        chunk $ QueryArrayPrefix (length chunks) ty chunks
       Ref MatchExt{} -> error "preProcessPat"
       Byte w -> do
         b <- builder
@@ -1461,6 +1461,24 @@ withTerm vars term action = do
     buildTerm reg vars term
     action reg
 
+outputNatConst :: Word64 -> Register 'BinaryOutputPtr -> Code ()
+outputNatConst w r
+  | fromIntegral i == w = outputNatImm i r
+  | otherwise = do
+      c <- constant w
+      outputNat c r
+  where
+    i = fromIntegral w
+
+loadConst :: Word64 -> Register 'Word -> Code ()
+loadConst w r
+  | fromIntegral i == w = loadI32 i r
+  | otherwise = do
+      c <- constant w
+      move c r
+  where
+    i = fromIntegral w :: Int32
+
 -- | Serialize a term into the given output register.
 buildTerm
   :: Register 'BinaryOutputPtr
@@ -1471,18 +1489,18 @@ buildTerm output vars term = go term
   where
   go term = case term of
     Byte b -> outputByteImm (fromIntegral b) output
-    Nat n -> outputNatImm n output
+    Nat n -> outputNatConst n output
     String s ->
       local $ \ptr end -> do
         -- NOTE: We assume that the string has been validated during parsing.
         loadLiteral (mangleString s) ptr end
         outputBytes ptr end output
     Array vs -> do
-      outputNatImm (fromIntegral (length vs)) output
+      outputNatConst (fromIntegral (length vs)) output
       mapM_ go vs
     Tuple fields -> mapM_ go fields
-    Alt n term -> do outputNatImm n output; go term
-    Ref (MatchFid f) -> outputNatImm (fromIntegral (fromFid f)) output
+    Alt n term -> do outputNatConst n output; go term
+    Ref (MatchFid f) -> outputNatConst (fromIntegral (fromFid f)) output
     Ref (MatchPrefix str rest) -> do
       local $ \ptr end -> do
         let
@@ -1577,7 +1595,7 @@ matchPat vars input inputend fail chunks = do
       return ()
   match isLast (QueryArrayPrefix npatterns ty patterns) = do
     local $ \size patternsLen -> do
-      loadConst npatterns patternsLen
+      loadConst (fromIntegral npatterns) patternsLen
       inputNat input inputend size
       jumpIfLt size patternsLen fail
       mapM_isLast isLast match patterns

@@ -9,10 +9,13 @@
 module Glean.Bytecode.Generate.Cpp (main)
 where
 
+import Data.Bits
 import Data.List (intercalate, stripPrefix)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Text.IO as Text
+import Data.Word (Word64)
+import Numeric (showHex)
 import System.Directory
 import System.Environment
 import System.Exit (die)
@@ -90,14 +93,20 @@ genEvaluator =
 -- a struct containing its decoded arguments and adjust PC to point to the next
 -- instruction in the stream.
 genInsnEval :: Insn -> [Text]
-genInsnEval Insn{..} =
+genInsnEval insn@Insn{..} =
   [ "struct " <> insnName <> " {" ]
   ++ map indent (concatMap declare insnArgs) ++
   [ "};"
   , ""
-  , "FOLLY_ALWAYS_INLINE " <> retType <> " eval_" <> insnName <> "() {"
+  , "FOLLY_ALWAYS_INLINE " <> retType <> " eval_" <> insnName <> "(uint64_t insn) {"
   , "  " <> insnName <> " args;" ]
-  ++ map indent (concatMap decode insnArgs) ++
+
+  -- Telling the compiler that the upper bits are 0 lets it omit the mask for
+  -- the last operand
+  ++ ["  folly::assume((insn >> " <> Text.pack (show used) <> ") == 0);"
+      | let used = insnUsedBits insn, used /= 64 ]
+
+  ++ [indent line | opd <- insnOperands insn, line <- decode opd ] ++
   [ "  return execute(args);"
   , "}" ]
   where
@@ -113,28 +122,35 @@ genInsnEval Insn{..} =
     declare (Arg name (Reg _ ty _)) =
       [ "Reg<" <> cppType ty <> "> " <> name <> ";" ]
     declare (Arg name Offsets) =
-      [ "uint64_t " <> name <> "_size;"
+      [ "uint32_t " <> name <> "_size;"
       , "const uint64_t *" <> name <> ";" ]
     declare (Arg name Regs) =
-      [ "uint64_t " <> name <> "_size;"
+      [ "uint32_t " <> name <> "_size;"
       , "const uint64_t *" <> name <> ";" ]
 
-    decode (Arg name (Imm ImmLit)) =
-      [ "args." <> name <> " = &literals[*pc++];" ]
-    decode (Arg name (Imm _)) =
-      [ "args." <> name <> " = *pc++;" ]
-    decode (Arg name (Reg _ ty Load)) =
-      [ "args." <> name <> " = Reg<" <> cppType ty <> ">(&frame[*pc++]).get();" ]
-    decode (Arg name (Reg _ ty _)) =
-      [ "args." <> name <> " = Reg<" <> cppType ty <> ">(&frame[*pc++]);" ]
-    decode (Arg name Offsets) =
-      [ "args." <> name <> "_size = *pc++;"
-      , "args." <> name <> " = pc;"
+    decode Opd{..} = assign opdArg $
+      "(insn >> " <> Text.pack (show opdStart) <> ") & 0x"
+        <> Text.pack (showHex (1 `shiftL` opdSize - 1 :: Word64) "")
+        <> "U"
+
+    assign (Arg name ty) val =
+      ( "args." <> name <> " = " <> load ty val <> ";" ) : rest name ty val
+
+    load (Imm ImmLit) val = "&literals[" <> val <> "]"
+    load (Imm ty) val = "static_cast<" <> immType ty <> ">(" <> val <> ")"
+    load (Reg _ ty Load) val =
+      "Reg<" <> cppType ty <> ">(&frame[" <> val <> "]).get()"
+    load (Reg _ ty _) val = "Reg<" <> cppType ty <> ">(&frame[" <> val <> "])"
+    load Offsets _ = "pc"
+    load Regs _ = "pc"
+
+    rest name Offsets val =
+      [ "args." <> name <> "_size = " <> val <> ";"
       , "pc += args." <> name <> "_size;" ]
-    decode (Arg name Regs) =
-      [ "args." <> name <> "_size = *pc++;"
-      , "args." <> name <> " = pc;"
+    rest name Regs val =
+      [ "args." <> name <> "_size = " <> val <> ";"
       , "pc += args." <> name <> "_size;" ]
+    rest _ _ _ = []
 
 cppType :: Ty -> Text
 cppType DataPtr = "const unsigned char *"
@@ -144,8 +160,11 @@ cppType BinaryOutputPtr = "binary::Output *"
 cppType _ = "uint64_t"
 
 immType :: ImmTy -> Text
-immType ImmWord = "uint64_t"
-immType ImmOffset = "uint64_t"
+immType U8 = "uint8_t"
+immType I8 = "int8_t"
+immType U32 = "uint32_t"
+immType I32 = "int32_t"
+immType ImmOffset = "int32_t"
 immType ImmLit = "const std::string *"
 
 -- | Generate a switch-based evaluator.
@@ -173,7 +192,8 @@ genEvalSwitch :: [Text]
 genEvalSwitch =
   [ "FOLLY_ALWAYS_INLINE const uint64_t * FOLLY_NULLABLE evalSwitch() {"
   , "  while (true) {"
-  , "    switch (static_cast<Op>(*pc++)) {" ]
+  , "    const uint64_t insn = *pc++;"
+  , "    switch (static_cast<Op>(insn & 0xff)) {" ]
   ++ intercalate [""] (map genAlt instructions)
   ++
   [ "" ]
@@ -211,12 +231,14 @@ genEvalIndirect =
   ++
   [ "  };"
   , ""
+  , "  uint64_t insn;"
+  , ""
   , dispatch
   , "" ]
   ++ intercalate [""] (map genAlt instructions) ++
   ["}"]
   where
-    dispatch = "  goto *labels[*pc++];"
+    dispatch = "  insn = *pc++; goto *labels[insn&0xff];"
 
     genAlt insn =
       "label_" <> insnName insn <> ":"
@@ -230,4 +252,4 @@ makeCall insn cont
       [ "        " <> call
       , cont ]
   where
-    call = "eval_" <> insnName insn <> "();"
+    call = "eval_" <> insnName insn <> "(insn);"

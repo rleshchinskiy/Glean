@@ -16,8 +16,12 @@ module Glean.Bytecode.Generate.Instruction
   , instructions
   , version
   , lowestSupportedVersion
+  , Opd(..)
+  , insnOperands
+  , insnUsedBits
   ) where
 
+import Data.List (scanl')
 import Data.Text (Text)
 
 import Glean.Bytecode.Types
@@ -58,7 +62,10 @@ data ArgTy
 
 -- | Type of an immediate value
 data ImmTy
-  = ImmWord
+  = U8
+  | U32
+  | I8
+  | I32
   | ImmOffset
   | ImmLit
   deriving(Eq,Ord,Show)
@@ -152,12 +159,12 @@ instructions =
 
     -- Encode an immediate Nat and store it in a binary::Output.
   , Insn "OutputNatImm" [] []
-      [ Arg "src" $ Imm ImmWord
+      [ Arg "src" $ Imm U32
       , Arg "output" $ reg BinaryOutputPtr Load ]
 
     -- Encode a byte in a binary::Output
   , Insn "OutputByteImm" [] []
-      [ Arg "src" $ Imm ImmWord
+      [ Arg "src" $ Imm U8
       , Arg "output" $ reg BinaryOutputPtr Load ]
 
     -- Write a sequence of bytes to a binary::Output.
@@ -192,8 +199,8 @@ instructions =
       , Arg "dst" $ reg Word Store ]
 
     -- Write a constant into a register.
-  , Insn "LoadConst" [] []
-      [ Arg "imm" $ Imm ImmWord
+  , Insn "LoadI32" [] []
+      [ Arg "imm" $ Imm I32
       , Arg "dst" $ reg Word Store ]
 
     -- Load the address and size of a literal
@@ -209,7 +216,7 @@ instructions =
 
     -- Subtract a constant from a register.
   , Insn "SubConst" [] []
-      [ Arg "imm" $ Imm ImmWord
+      [ Arg "imm" $ Imm U32
       , Arg "dst" $ reg Word Update ]
 
     -- Subtract a register from a register.
@@ -219,7 +226,7 @@ instructions =
 
     -- Add a constant to a register.
   , Insn "AddConst" [] ["Addable a 'Word"]
-      [ Arg "imm" $ Imm ImmWord
+      [ Arg "imm" $ Imm U32
       , Arg "dst" $ polyReg "a" Word Update ]
 
     -- Add a register to another register
@@ -301,7 +308,7 @@ instructions =
       , Arg "tgt" $ Imm ImmOffset ]
 
   , Insn "SysCall" [] []
-      [ Arg "num" $ Imm ImmWord
+      [ Arg "num" $ Imm U8
       , Arg "args" Regs
       ]
 
@@ -332,3 +339,40 @@ instructions =
   , Insn "Ret" [EndBlock, Return] [] []
 
   ]
+
+--- Packed representation
+
+-- | Operands: args with their start bit index (little endian) and sizes in bits
+data Opd = Opd
+  { opdArg :: Arg
+  , opdStart :: Int
+  , opdSize :: Int
+  }
+
+-- | Determine the 'Insn's operands
+insnOperands :: Insn -> [Opd]
+insnOperands Insn{..} = zipWith3 Opd insnArgs starts sizes
+  where
+    sizes = map (argSize . argTy) insnArgs
+    starts = scanl' (+) 8 sizes
+
+-- | Get the size of an argument in the Insn word in bits
+argSize :: ArgTy -> Int
+argSize (Imm ty) = immSize ty
+argSize Reg{} = 12
+argSize Offsets = 32
+argSize Regs = 32
+
+-- | Get the size of an immediate operand in the Insn word in bits
+immSize :: ImmTy -> Int
+immSize U8 = 8
+immSize I8 = 8
+immSize U32 = 32
+immSize I32 = 32
+immSize ImmOffset = 32
+immSize ImmLit = 12
+
+-- | Get the number of unused bits (always the most significant ones) in an
+-- 'Insn'
+insnUsedBits :: Insn -> Int
+insnUsedBits insn  = sum (map (argSize . argTy) $ insnArgs insn) + 8

@@ -9,12 +9,15 @@
 module Glean.Bytecode.Generate.Haskell (main)
 where
 
+import Data.Bits (shiftL)
 import Data.Char (toLower)
 import Data.List (intercalate, intersperse, stripPrefix)
 import Data.Maybe
 import Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Text.IO as Text
+import Data.Word (Word64)
+import Numeric (showHex)
 import System.Directory
 import System.Environment
 import System.Exit (die)
@@ -57,7 +60,10 @@ main = do
     , "insnWords"
     , "insnShow" ] $
     intercalate [""]
-    [ [ "import Data.Word (Word64)"
+    [ [ "import Control.Monad (replicateM)"
+      , "import Data.Bits"
+      , "import Data.Int (Int8, Int32)"
+      , "import Data.Word (Word8, Word32, Word64)"
       , "import Text.Show (showListWith)"
       , "import qualified Glean.Bytecode.Decode as D"
       , "import Glean.Bytecode.Types" ]
@@ -71,7 +77,8 @@ main = do
 
   genModule dir "Issue" [] (map (varName . insnName) instructions) $
     [ "import Data.ByteString (ByteString)"
-    , "import Data.Word (Word64)"
+    , "import Data.Int (Int8, Int32)"
+    , "import Data.Word (Word8, Word32, Word64)"
     , "import Glean.RTS.Bytecode.Gen.Instruction (Insn(..))"
     , "import Glean.RTS.Bytecode.Code"
     , "import Glean.Bytecode.Types"
@@ -113,12 +120,18 @@ genInsnType = "data Insn where" : map genInsn instructions
         <> Text.concat [genArgTy (argTy arg) <> " -> " | arg <- insnArgs]
         <> "Insn"
 
-    genArgTy (Imm ImmOffset) = "{-# UNPACK #-} !Label"
-    genArgTy (Imm ImmLit) = "{-# UNPACK #-} !Literal"
-    genArgTy (Imm ImmWord) = "{-# UNPACK #-} !Word64"
+    genArgTy (Imm ty) = "{-# UNPACK #-} !" <> immTy ty
     genArgTy (Reg var ty _) = "{-# UNPACK #-} !(" <> showRegTy var ty <> ")"
     genArgTy Offsets = "[Label]"
     genArgTy Regs = "[Register 'Word]"
+
+    immTy :: ImmTy -> Text
+    immTy U8 = "Word8"
+    immTy I8 = "Int8"
+    immTy U32 = "Word32"
+    immTy I32 = "Int32"
+    immTy ImmOffset = "Label"
+    immTy ImmLit = "Literal"
 
 showTy :: Ty -> Text
 showTy ty = "'" <> Text.pack (show ty)
@@ -164,28 +177,23 @@ genInsnLabels =
 genInsnSize :: [Text]
 genInsnSize =
   "insnSize :: Insn -> Word64" :
-  [ "insnSize "
-      <> mkPat insnName (map mkArg insnArgs)
-      <> " = "
-      <> showSize (foldr argSize (1::Int,"") insnArgs)
-    | Insn{..} <- instructions ]
+  [ "insnSize ("
+      <> Text.unwords (insnName : map mkArg insnArgs)
+      <> ") = 1"
+      <> dyn
+    | Insn{..} <- instructions
+    , let dyn = Text.concat (map dynSize insnArgs)
+    , not $ Text.null dyn ]
+  ++
+  [ "insnSize _ = 1" ]
   where
-    mkPat name [] = name
-    mkPat name args
-      | all (=="_") args = name <> "{}"
-      | otherwise = "(" <> Text.unwords (name : args) <> ")"
-
     mkArg (Arg name Offsets) = name
     mkArg (Arg name Regs) = name
     mkArg _ = "_"
 
-    showSize (c,v) = Text.pack (show c) <> v
-
-    argSize (Arg name Offsets) (c,v) =
-      (c+1, v <> " + fromIntegral (length " <> name <> ")")
-    argSize (Arg name Regs) (c,v) =
-      (c+1, v <> " + fromIntegral (length " <> name <> ")")
-    argSize _ (c,v) = (c+1, v)
+    dynSize (Arg name Offsets) = " + fromIntegral (length " <> name <> ")"
+    dynSize (Arg name Regs) = " + fromIntegral (length " <> name <> ")"
+    dynSize _ = ""
 
 -- | Generates a function that encodes an instruction as a list of words.
 genInsnWords :: [Text]
@@ -197,19 +205,31 @@ genInsnWords =
       <> insnPattern id insn
       <> ") = ["
       <> Text.pack (show op)
-      <> Text.concat (map argWords (insnArgs insn))
-      <> "]" | (op, insn) <- zip [0 :: Int ..] instructions ]
+      <> Text.concat [" .|. " <> encode opd | opd <- insnOperands  insn]
+      <> "]"
+      <> Text.concat (map argWords $ insnArgs insn)
+        | (op, insn) <- zip [0 :: Int ..] instructions ]
     where
-      argWords (Arg name (Imm ImmOffset)) = ", fromLabel " <> name
-      argWords (Arg name (Imm ImmLit)) = ", fromLiteral " <> name
-      argWords (Arg name (Imm ImmWord)) = ", " <> name
-      argWords (Arg name Reg{}) = ", fromReg " <> name
-      argWords (Arg name Offsets) =
-        ", fromIntegral (length " <> name <> ")] ++ map fromLabel " <> name
-          <> " ++ ["
-      argWords (Arg name Regs) =
-        ", fromIntegral (length " <> name <> ")] ++ map fromReg " <> name
-          <> " ++ ["
+      encode Opd{..} =
+          "(" <> argValue opdArg
+            <> " `unsafeShiftL` " <> Text.pack (show opdStart) <> ")"
+
+      argValue (Arg name (Imm ty)) = immValue name ty
+      argValue (Arg name Reg{}) = "fromReg " <> name
+      argValue (Arg name Offsets) = "fromIntegral (length " <> name <> ")"
+      argValue (Arg name Regs) = "fromIntegral (length " <> name <> ")"
+
+      immValue :: Text -> ImmTy -> Text
+      immValue name U8 = "fromIntegral " <> name
+      immValue name I8 = "fromIntegral " <> name
+      immValue name U32 = "fromIntegral " <> name
+      immValue name I32 = "fromIntegral " <> name
+      immValue name ImmOffset = "(fromLabel " <> name <> " .&. 0xFFFFFFFF)"
+      immValue name ImmLit = "fromLiteral " <> name
+
+      argWords (Arg name Offsets) = "++ map fromLabel " <> name
+      argWords (Arg name Regs) = "++ map fromReg " <> name
+      argWords _ = ""
 
 insnPattern :: (Text -> Text) -> Insn -> Text
 insnPattern cname Insn{..} =
@@ -238,9 +258,7 @@ genIssue = intercalate [""]
     context [c] = c <> " => "
     context cs = "(" <> Text.intercalate ", " cs <> ") => "
 
-    genArgType (Imm ImmLit) = "ByteString"
-    genArgType (Imm ImmOffset) = "Label"
-    genArgType (Imm ImmWord) = "Word64"
+    genArgType (Imm ty) = immArgType ty
     genArgType (Reg var ty _) = showRegTy var ty
     genArgType Offsets = "[Label]"
     genArgType Regs = "[Register 'Word]"
@@ -256,20 +274,51 @@ genIssue = intercalate [""]
       | EndBlock `elem` effects = "issueEndBlock"
       | otherwise = "issue"
 
+    immArgType :: ImmTy -> Text
+    immArgType U8 = "Word8"
+    immArgType I8 = "Int8"
+    immArgType U32 = "Word32"
+    immArgType I32 = "Int32"
+    immArgType ImmOffset = "Label"
+    immArgType ImmLit = "ByteString"
+
 genDecodable :: [Text]
 genDecodable =
   [ "instance D.Decodable Insn where"
   , "  decode = do"
-  , "    op <- D.decode"
-  , "    case (op :: Word64) of" ]
+  , "    insn <- D.decode"
+  , "    let op = fromIntegral (insn :: Word64) :: Word8"
+  , "    case op of" ]
   ++
-  [ Text.concat $ [ "      ", Text.pack (show i), " -> " ] ++
-    case length insnArgs of
-      0 -> ["pure ", insnName]
-      n -> insnName : " <$> D.decode" : replicate (n-1) " <*> D.decode"
-    | (i, Insn{..}) <- zip [0 :: Int ..] instructions ]
+  concat [ [ "      " <> Text.pack (show i) <> " -> do" ]
+    ++ map ("        " <> ) (concatMap decodeOpd $ insnOperands insn)
+    ++
+    [ "        return $ " <> Text.unwords (insnName : map argName insnArgs) ]
+    | (i, insn@Insn{..}) <- zip [0 :: Int ..] instructions ]
   ++
   [ "      _ -> fail $ \"invalid opcode \" ++ show op"]
+  where
+    decodeOpd Opd{..} = decodeArg opdArg $
+       "(insn `unsafeShiftR` " <> Text.pack (show opdStart) <> ") .&. 0x"
+        <> Text.pack (showHex (1 `shiftL` opdSize - 1 :: Word64) "")
+
+    decodeArg (Arg name (Imm ty)) val =
+      [ "let " <> name <> " = " <> decodeImm ty <> " $ " <> val ]
+    decodeArg (Arg name Reg{}) val =
+      [ "let " <> name <> " = Register $ " <> val ]
+    decodeArg (Arg name Offsets) val =
+      [ name <> " <- replicateM (fromIntegral $ " <> val <> ") $ " <> label <> " <$> D.decode"]
+    decodeArg (Arg name Regs) val =
+      [ name <> " <- replicateM (fromIntegral $ " <> val <> ") D.decode"]
+
+    decodeImm U8 = "fromIntegral"
+    decodeImm I8 = "fromIntegral"
+    decodeImm U32 = "fromIntegral"
+    decodeImm I32 = "fromIntegral"
+    decodeImm ImmOffset = label
+    decodeImm ImmLit = "Literal"
+
+    label = "(Label . fromIntegral . (fromIntegral :: Word64 -> Int32))"
 
 genInsnShow :: [Text]
 genInsnShow =
@@ -288,7 +337,7 @@ genInsnShow =
     where
       showArg (Arg name (Imm ImmOffset)) = "showLabel " <> name
       showArg (Arg name (Imm ImmLit)) = "show (fromLiteral " <> name <> ")"
-      showArg (Arg name (Imm ImmWord)) = "show " <> name
+      showArg (Arg name Imm{}) = "show " <> name
       showArg (Arg name Reg{}) = "showReg " <> name
       showArg (Arg name Offsets) =
         "showListWith (showString . showLabel) " <> name <> " \"\""

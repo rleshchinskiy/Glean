@@ -13,6 +13,8 @@
 #include "glean/rts/string.h"
 #include "glean/rts/prim.h"
 
+#include <folly/lang/Assume.h>
+
 namespace facebook {
 namespace glean {
 namespace rts {
@@ -107,7 +109,7 @@ struct Eval {
     a.dst << a.output->size();
   }
 
-  FOLLY_ALWAYS_INLINE void execute(LoadConst a) {
+  FOLLY_ALWAYS_INLINE void execute(LoadI32 a) {
     a.dst << a.imm;
   }
 

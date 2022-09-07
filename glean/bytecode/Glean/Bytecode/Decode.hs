@@ -17,7 +17,8 @@ where
 import Control.Monad
 import Control.Monad.State.Strict (State, runState, state)
 import Control.Monad.Trans.Maybe (MaybeT(..))
-import Data.Word (Word64)
+import Data.Int (Int8, Int32)
+import Data.Word (Word8, Word32, Word64)
 
 import Glean.Bytecode.Types
 
@@ -38,6 +39,21 @@ instance Decodable Word64 where
   decode = MaybeT $ state $ \xs -> case xs of
     y : ys -> (Just y, ys)
     _ -> (Nothing, xs)
+
+decodeWord :: Integral a => Decode a
+decodeWord = fromIntegral <$> (decode :: Decode Word64)
+
+instance Decodable Word8 where
+  decode = decodeWord
+
+instance Decodable Word32 where
+  decode = decodeWord
+
+instance Decodable Int8 where
+  decode = decodeWord
+
+instance Decodable Int32 where
+  decode = decodeWord
 
 instance Decodable Literal where
   decode = Literal <$> decode

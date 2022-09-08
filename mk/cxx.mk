@@ -57,6 +57,7 @@ CXX_SOURCES_glean_cpp_rts = \
     glean/rts/substitution.cpp \
     glean/rts/thrift.cpp \
     glean/rts/timer.cpp \
+    glean/rts/trie.cpp \
     glean/rts/validate.cpp \
     glean/rts/bytecode/subroutine.cpp
 CXX_FLAGS_glean_cpp_rts = -DOSS=1
@@ -79,10 +80,22 @@ CXX_SOURCES_glean_cpp_client = \
     glean/interprocess/cpp/counters.cpp
 CXX_FLAGS_glean_cpp_client = -DOSS=1
 
+CXX_GTEST_SOURCES_BinaryTest = \
+    glean/rts/tests/BinaryTest.cpp
+CXX_GTEST_LIBS_BinaryTest = glean_cpp_rts
+CXX_GTEST_FLAGS_BinaryTest = -DOSS=1
+
+CXX_GTEST_SOURCES_TrieTest = \
+    glean/rts/tests/TrieTest.cpp
+CXX_GTEST_LIBS_TrieTest = glean_cpp_rts
+CXX_GTEST_FLAGS_TrieTest = -DOSS=1
+
 # End of C++ library definitions
 
 # Determine all C++ libraries
 CXX_LIBRARIES = $(subst CXX_SOURCES_,,$(filter CXX_SOURCES_%, $(.VARIABLES)))
+
+CXX_GTESTS = $(subst CXX_GTEST_SOURCES_,,$(filter CXX_GTEST_SOURCES_%, $(.VARIABLES)))
 
 .PHONY: cxx-libraries
 cxx-libraries:

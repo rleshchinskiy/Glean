@@ -19,6 +19,7 @@ import Data.Text (Text)
 import Util.String.Quasi
 
 import Glean
+import Glean.Database.Test as DB
 import Glean.Query.Thrift.Internal
 import qualified Glean.Schema.CodeCxx.Types as Code.Cxx
 import qualified Glean.Schema.Cxx1.Types as Cxx
@@ -32,7 +33,7 @@ import Glean.Util.Benchmark
 import BenchDB
 
 main :: IO ()
-main = benchmarkMain $ \run -> withBenchDB 10000 $ \env repo -> do
+main = benchmarkMain $ \run -> withBenchDB' [DB.setMemoryStorage] 10000 $ \env repo -> do
   let
     simpleQueryThrift = query $ Query.Sys.Blob_with_key "x1"
     nestedQueryThrift = query $ Query.Cxx.FunctionName_with_key $ def

@@ -60,6 +60,7 @@ CXX_SOURCES_glean_cpp_rts = \
     glean/rts/substitution.cpp \
     glean/rts/thrift.cpp \
     glean/rts/timer.cpp \
+    glean/rts/trie.cpp \
     glean/rts/validate.cpp
 CXX_FLAGS_glean_cpp_rts = -DOSS=1
 
@@ -87,6 +88,11 @@ CXX_GTEST_SOURCES_BinaryTest = \
     glean/rts/tests/BinaryTest.cpp
 CXX_GTEST_LIBS_BinaryTest = glean_cpp_rts
 CXX_GTEST_FLAGS_BinaryTest = -DOSS=1
+
+CXX_GTEST_SOURCES_TrieTest = \
+    glean/rts/tests/TrieTest.cpp
+CXX_GTEST_LIBS_TrieTest = glean_cpp_rts
+CXX_GTEST_FLAGS_TrieTest = -DOSS=1
 
 # End of C++ library definitions
 

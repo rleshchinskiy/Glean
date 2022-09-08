@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "glean/rts/fact.h"
+#include "glean/rts/lookup.h"
 
 #include <folly/Memory.h>
 
@@ -27,6 +27,7 @@ class Tree final {
   struct Node256;
 
   Node * FOLLY_NULLABLE root = nullptr;
+  size_t count = 0;
 
 public:
   struct Stats {
@@ -48,16 +49,27 @@ public:
     size_t nodes() const { return node0 + node4 + node16 + node48 + node256; }
   };
 
-  struct Iterator {
+  struct Iterator final : FactIterator {
     const Node * FOLLY_NULLABLE node = nullptr;
     std::string buf;
     size_t prefixlen = 0;
 
+    Iterator() = default;
+    Iterator(const Node *node, std::string buf, size_t prefixlen =0)
+      : node(node), buf(std::move(buf)), prefixlen(prefixlen) {}
+
     bool done() const { return node == nullptr; }
     const std::string& getKey() const { return buf; }
-    void next();
+    void next() override;
+
+    Fact::Ref get(Demand demand = KeyValue) override;
+
+    std::optional<Id> lower_bound() override { return {}; }
+    std::optional<Id> upper_bound() override { return {}; }
 
     static Iterator leftmost(
+      const Node * FOLLY_NULLABLE node, std::string prefix);
+    static Iterator right(
       const Node * FOLLY_NULLABLE node, std::string prefix);
 
     void down(unsigned char byte, const Node *node);
@@ -73,16 +85,25 @@ public:
 
   friend struct Iterator;
 
+  using iterator = Iterator;
+  using const_iterator = Iterator;
+
   Tree() noexcept = default;
+  Tree(const Tree& other) = delete;
   Tree(Tree&& other) noexcept {
     root = other.root;
+    count = other.count;
     other.root = nullptr;
+    other.count = 0;
   }
+  Tree& operator=(const Tree& other) = delete;
   Tree& operator=(Tree&& other) noexcept {
     if (this != &other) {
       clear();
       root = other.root;
+      count = other.count;
       other.root = nullptr;
+      other.count = 0;
     }
     return *this;
   }
@@ -92,11 +113,20 @@ public:
 
   void clear() noexcept;
 
+  bool empty() const noexcept {
+    return root != nullptr;
+  }
+
+  size_t size() const noexcept {
+    return count;
+  }
+
   Iterator begin() const;
   Iterator find(folly::ByteRange key) const;
   Iterator lower_bound(folly::ByteRange key) const;
+  Iterator lower_bound(folly::ByteRange key, size_t prefix_size) const;
 
-  void insert(folly::ByteRange key, const Fact *fact);
+  bool insert(folly::ByteRange key, const Fact *fact);
 
   std::vector<std::string> keys() const;
 

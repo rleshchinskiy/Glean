@@ -17,6 +17,12 @@
 #include "glean/rts/store.h"
 #include "glean/rts/substitution.h"
 
+#define USE_ROART 1
+
+#if USE_ROART
+#include "glean/rts/trie.h"
+#endif
+
 #include <atomic>
 #include <boost/intrusive/list.hpp>
 #include <boost/iterator/transform_iterator.hpp>
@@ -262,6 +268,7 @@ private:
   /// don't do seeks on FactSets.
   struct Index;
   OnDemand<Index> index;
+    /// Type of index maps
 };
 
 }

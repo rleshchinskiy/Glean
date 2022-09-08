@@ -14,7 +14,11 @@ namespace rts {
 
 struct FactSet::Index {
   /// Type of index maps
+#if USE_ROART
+  using map_t = roart::Tree;
+#else
   using map_t = std::map<folly::ByteRange, const Fact *>;
+#endif
 
   /// Type of index maps with synchronised access
   using entry_t = folly::Synchronized<map_t>;
@@ -169,6 +173,7 @@ std::unique_ptr<FactIterator> FactSet::seek(
     Pid type,
     folly::ByteRange start,
     size_t prefix_size) {
+#if !USE_ROART
   struct SeekIterator : FactIterator {
     explicit SeekIterator(Index::map_t::iterator b, Index::map_t::iterator e)
       : current(b)
@@ -190,6 +195,7 @@ std::unique_ptr<FactIterator> FactSet::seek(
     Index::map_t::const_iterator current;
     const Index::map_t::const_iterator end;
   };
+#endif
 
   assert(prefix_size <= start.size());
 
@@ -202,7 +208,11 @@ std::unique_ptr<FactIterator> FactSet::seek(
         if (map.size() != p->size()) {
           map.clear();
           for (const Fact *fact : *p) {
+#if USE_ROART
+            map.insert(fact->key(), fact);
+#else
             map.insert({fact->key(), fact});
+#endif
           }
         }
       });
@@ -212,6 +222,10 @@ std::unique_ptr<FactIterator> FactSet::seek(
     // as per spec.
     auto& map = entry.unsafeGetUnlocked();
 
+#if USE_ROART
+    auto it = map.lower_bound(start, prefix_size);
+    return std::make_unique<roart::Tree::Iterator>(std::move(it));
+#else
     const auto next =
       binary::lexicographicallyNext({start.data(), prefix_size});
     return std::make_unique<SeekIterator>(
@@ -219,6 +233,7 @@ std::unique_ptr<FactIterator> FactSet::seek(
       next.empty()
         ? map.end()
         : map.lower_bound(binary::byteRange(next)));
+#endif
   } else {
     return std::make_unique<EmptyIterator>();
   }

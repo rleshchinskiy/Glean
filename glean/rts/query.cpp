@@ -600,7 +600,6 @@ std::unique_ptr<QueryResults> restartQuery(
       std::move(queryCont));
 }
 
-
 std::unique_ptr<QueryResults> executeQuery (
     Inventory& inventory,
     Define& facts,
@@ -661,6 +660,9 @@ std::unique_ptr<QueryResults> executeQuery (
           keyBuf = std::move(*savedIter.key());
         }
         const auto key = binary::byteRange(keyBuf);
+        if (prefixSize > key.size()) {
+          error("restart iter has invalid prefix size");
+        }
         if (savedIter.from().has_value() && savedIter.to().has_value()) {
           auto from = savedIter.from().value();
           auto to = savedIter.to().value();
@@ -670,8 +672,12 @@ std::unique_ptr<QueryResults> executeQuery (
           iter = facts.seek(type, key, prefixSize);
         }
         auto res = iter->get(FactIterator::KeyOnly);
-        if (!res || res.key() != key) {
-          error("restart iter didn't find a key");
+        if (!res) {
+          error("restart iter found no key");
+        }
+        if (res.key() != key) {
+          error("restart iter found wrong key - expected [{}], got [{}]",
+            binary::hex(key), binary::hex(res.key()));
         }
         id = res.id;
       } else {

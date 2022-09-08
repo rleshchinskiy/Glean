@@ -48,4 +48,4 @@ if [ "$ACTION" = "list-bin" ]; then
   CABAL_ARGS+=(-vsilent)
 fi
 
-call_cabal "${CABAL_ARGS[@]}" "${ACTION}" "${TARGET}" -- "$@"
+call_cabal "${CABAL_ARGS[@]}" "${ACTION}" -f benchmarks "${TARGET}" -- "$@"

@@ -7,7 +7,7 @@
 -}
 
 {-# LANGUAGE TypeApplications #-}
-module BenchDB (withBenchDB) where
+module BenchDB (withBenchDB, withBenchDB') where
 
 import Control.Monad
 import qualified Data.ByteString.Char8 as BC
@@ -16,7 +16,7 @@ import qualified Data.Text as Text
 
 import Glean
 import qualified Glean.Backend as Backend
-import Glean.Database.Test (withEmptyTestDB, completeTestDB)
+import Glean.Database.Test (Setting, withEmptyTestDB, completeTestDB)
 import Glean.Database.Open
 import Glean.Database.Write.Batch
 import qualified Glean.Schema.Sys.Types as Sys
@@ -28,7 +28,10 @@ import qualified Glean.Schema.GleanTest as Glean.Test
 import Glean.Typed
 
 withBenchDB :: Int -> (forall b . Backend b => b -> Repo -> IO a) -> IO a
-withBenchDB num act = withEmptyTestDB [] $ \env repo -> do
+withBenchDB = withBenchDB' []
+
+withBenchDB' :: [Setting] -> Int -> (forall b . Backend b => b -> Repo -> IO a) -> IO a
+withBenchDB' settings num act = withEmptyTestDB settings $ \env repo -> do
   withOpenDatabase env repo $ \odb ->
     void $ return odb
 

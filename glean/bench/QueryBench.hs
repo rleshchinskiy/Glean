@@ -19,6 +19,7 @@ import Util.String.Quasi
 
 import Glean
 import Glean.Angle as Angle
+import Glean.Database.Test as DB
 import qualified Glean.Schema.CodeCxx.Types as Code.Cxx
 import qualified Glean.Schema.Codemarkup.Types as Codemarkup
 import qualified Glean.Schema.Cxx1.Types as Cxx
@@ -29,7 +30,7 @@ import Glean.Util.Benchmark
 import BenchDB
 
 main :: IO ()
-main = benchmarkMain $ \run -> withBenchDB 10000 $ \env repo -> do
+main = benchmarkMain $ \run -> withBenchDB' [DB.setMemoryStorage] 10000 $ \env repo -> do
   let
     nestedAngle :: Query Cxx.FunctionName
     nestedAngle = angle "cxx1.FunctionName { name = \"x1\" }"

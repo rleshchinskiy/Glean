@@ -392,7 +392,6 @@ bool FactSet::sanityCheck() const {
   return true;
 }
 
-
 }
 }
 }

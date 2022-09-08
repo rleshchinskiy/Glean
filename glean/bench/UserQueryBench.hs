@@ -114,7 +114,7 @@ factbenchmarks :: Env -> Repo -> [([Fid], PredicateRef)] -> [Benchmark]
 factbenchmarks env repo = concatMap (factbench [binQ, jsonQ, compactQ] env repo)
 
 main :: IO ()
-main = benchmarkMain $ \run -> withEmptyTestDB [] $ \env repo -> do
+main = benchmarkMain $ \run -> withEmptyTestDB [setMemoryStorage] $ \env repo -> do
   withOpenDatabase env repo $ \odb ->
     void $ return odb
 

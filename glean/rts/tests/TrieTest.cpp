@@ -223,10 +223,6 @@ TEST(TrieTest, lowerBound2) {
   z += "bcdefgh";
   auto [tree, fact] = mkTree({z ,"bcdefgh"});
 
-  std::ostringstream os;
-  tree.dump(os);
-  LOG(INFO) << os.str();
-
   EXPECT_FALSE(tree.lower_bound(binary::byteRange(z)).done());
   EXPECT_FALSE(tree.lower_bound(key("bcdefgh")).done());
 }

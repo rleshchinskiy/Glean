@@ -14,6 +14,13 @@ namespace rts {
 
 namespace roart {
 
+Tree::~Tree() noexcept {
+  if (count != 0) {
+    LOG(INFO) << "Tree::~Tree " << stats();
+  }
+  clear();
+}
+
 struct Tree::Node {
   enum Type : unsigned char { N0, N4, N16, N48, N256 };
   Type type;
@@ -566,6 +573,7 @@ bool Tree::insert(folly::ByteRange key, const Fact *fact) {
     root->parent = nullptr;
     root->index = 0;
     count = 1;
+    keymem = key.size();
     return true;
   } else {
     Node::Insert ins;
@@ -576,6 +584,7 @@ bool Tree::insert(folly::ByteRange key, const Fact *fact) {
     }
     if (ins.fact == nullptr) {
       ++count;
+      keymem += key.size();
       return true;
     } else {
       return false;
@@ -1151,6 +1160,7 @@ void Tree::Node256::stats(Stats& s) const {
 
 Tree::Stats Tree::stats() const {
   Stats s;
+  s.key_size = keymem;
   if (root) {
     root->stats(s);
   }

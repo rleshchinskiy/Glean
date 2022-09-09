@@ -28,6 +28,7 @@ class Tree final {
 
   Node * FOLLY_NULLABLE root = nullptr;
   size_t count = 0;
+  size_t keymem = 0;
 
 public:
   struct Stats {
@@ -45,6 +46,7 @@ public:
     size_t prefix_length = 0;
 
     size_t bytes = 0;
+    size_t key_size = 0;
 
     size_t nodes() const { return node0 + node4 + node16 + node48 + node256; }
   };
@@ -93,8 +95,10 @@ public:
   Tree(Tree&& other) noexcept {
     root = other.root;
     count = other.count;
+    keymem = other.keymem;
     other.root = nullptr;
     other.count = 0;
+    other.keymem = 0;
   }
   Tree& operator=(const Tree& other) = delete;
   Tree& operator=(Tree&& other) noexcept {
@@ -102,14 +106,14 @@ public:
       clear();
       root = other.root;
       count = other.count;
+      keymem = other.keymem;
       other.root = nullptr;
       other.count = 0;
+      other.keymem = 0;
     }
     return *this;
   }
-  ~Tree() noexcept {
-    clear();
-  }
+  ~Tree() noexcept;
 
   void clear() noexcept;
 
@@ -149,7 +153,9 @@ inline std::ostream& operator<<(std::ostream& s, const Tree::Stats& stats) {
     << " n16: " << stats.node16
     << " n48: " << stats.node48
     << " n256: " << stats.node256
-    << " size: " << stats.bytes;
+    << " size: " << stats.bytes
+    << " plen: " << stats.prefix_length
+    << " keysz: " << stats.key_size;
 }
 
 }

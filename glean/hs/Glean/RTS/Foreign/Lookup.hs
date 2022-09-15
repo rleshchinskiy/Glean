@@ -14,19 +14,24 @@ module Glean.RTS.Foreign.Lookup
   , startingId
   , firstFreeId
   , lookupFact
+  , Limits(..)
+  , serialize
   , withSnapshot
 ) where
 
-import Control.Exception (bracket)
+import Control.Exception (bracket, mask_)
+import Data.Coerce (coerce)
+import Data.Default
 import Data.Int
 import Data.Text
+import Data.Word (Word64)
 import Foreign.C
 import Foreign.Ptr
 
 import Util.FFI
 
 import Glean.FFI
-import Glean.RTS.Types (Fid(..))
+import Glean.RTS.Types (Fid(..), invalidFid)
 import qualified Glean.Types as Thrift
 
 -- | A reference to a thing we can look up facts in
@@ -75,6 +80,38 @@ lookupFact look fid =
             <$> unsafeMallocedByteString key_ptr key_size
             <*> unsafeMallocedByteString val_ptr val_size
 
+data Limits = Limits
+  { limitFrom :: Fid
+  , limitUpto :: Fid
+  , limitMaxFacts :: Word64
+  , limitMaxBytes :: Word64
+  }
+
+instance Default Limits where
+  def = Limits
+    { limitFrom = invalidFid
+    , limitUpto = invalidFid
+    , limitMaxFacts = maxBound
+    , limitMaxBytes = maxBound
+    }
+
+serialize :: CanLookup a => a -> Limits -> IO Thrift.Batch
+serialize look Limits{..} = mask_ $
+  withLookup look $ \look_ptr -> do
+  (Fid first_id, count, facts, facts_size, ids, ids_size) <- invoke $
+    glean_lookup_serialize
+      look_ptr
+      limitFrom
+      limitUpto
+      (fromIntegral limitMaxFacts)
+      (fromIntegral limitMaxBytes)
+  Thrift.Batch first_id (fromIntegral count)
+    <$> unsafeMallocedByteString facts facts_size
+    <*> (if ids /= nullPtr
+          then Just <$> unsafeMallocedVector (coerce ids) ids_size
+          else pure Nothing)
+    <*> pure mempty
+
 -- | Restrict the Lookup to facts up to the specified fact id
 withSnapshot :: CanLookup a => a -> Fid -> (Lookup -> IO b) -> IO b
 withSnapshot base boundary f =
@@ -105,5 +142,19 @@ foreign import ccall safe glean_lookup_fact
   -> Ptr (Ptr ())
   -> Ptr CSize
   -> Ptr (Ptr ())
+  -> Ptr CSize
+  -> IO CString
+
+foreign import ccall safe glean_lookup_serialize
+  :: Ptr Lookup
+  -> Fid
+  -> Fid
+  -> CSize
+  -> CSize
+  -> Ptr Fid
+  -> Ptr CSize
+  -> Ptr (Ptr ())
+  -> Ptr CSize
+  -> Ptr (Ptr Fid)
   -> Ptr CSize
   -> IO CString

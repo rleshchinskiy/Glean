@@ -14,6 +14,7 @@
 #include <common/hs/util/cpp/wrap.h>
 #endif
 #include "glean/if/gen-cpp2/glean_types.h"
+#include "glean/rts/batch.h"
 #include "glean/rts/bytecode/subroutine.h"
 #include "glean/rts/cache.h"
 #include "glean/rts/ffi.h"
@@ -353,6 +354,36 @@ const char *glean_lookup_fact(
     }
     key_bytes.release_to(key, key_size);
     value_bytes.release_to(value, value_size);
+  });
+}
+
+const char *glean_lookup_serialize(
+    Lookup *lookup,
+    int64_t from,
+    int64_t upto,
+    size_t max_results,
+    size_t max_bytes,
+    int64_t *first_id,
+    size_t *count,
+    void **facts,
+    size_t *facts_size,
+    int64_t **ids,
+    size_t *ids_size) {
+  return ffi::wrap([=] {
+    auto batch = Batch::serialize(
+      lookup->enumerate(Id::fromThrift(from), Id::fromThrift(upto)),
+      max_results,
+      max_bytes);
+    *first_id = batch.firstId.toThrift();
+    *count = batch.count;
+    if (!batch.ids.empty()) {
+      ffi::clone_array(batch.ids.data(), batch.ids.size())
+        .release_to(ids,ids_size);
+    } else {
+      *ids = nullptr;
+      *ids_size = 0;
+    }
+    batch.facts.moveBytes().release_to(facts, facts_size);
   });
 }
 

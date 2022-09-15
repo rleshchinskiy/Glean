@@ -63,6 +63,8 @@ handler State{..} req =
       fromMaybe (Thrift.Fact 0 mempty mempty) <$>
         Backend.queryFact backend repo id
 
+    Service.QueryFacts repo q -> Backend.queryFacts backend repo q
+
     Service.FirstFreeId repo -> Backend.firstFreeId backend repo
 
     Service.FactIdRange repo -> Backend.factIdRange backend repo

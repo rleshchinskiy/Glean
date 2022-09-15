@@ -88,6 +88,7 @@ data StackedDbOpts
 --
 class Backend a where
   queryFact :: a -> Thrift.Repo -> Thrift.Id -> IO (Maybe Thrift.Fact)
+  queryFacts :: a -> Thrift.Repo -> Thrift.QueryFacts -> IO Thrift.Batch
   firstFreeId :: a -> Thrift.Repo -> IO Thrift.Id
   factIdRange :: a -> Thrift.Repo -> IO Thrift.FactIdRange
   getSchemaInfo :: a -> Thrift.Repo -> Thrift.GetSchemaInfo
@@ -189,6 +190,7 @@ instance Show ThriftBackend where
 
 instance Backend (Some Backend) where
   queryFact (Some backend) = queryFact backend
+  queryFacts (Some backend) = queryFacts backend
   firstFreeId (Some backend) = firstFreeId backend
   factIdRange (Some backend) = factIdRange backend
   getSchemaInfo (Some backend) = getSchemaInfo backend
@@ -294,6 +296,7 @@ instance Backend ThriftBackend where
     case fact of
       Thrift.Fact 0 _ _ -> return Nothing
       _ -> return (Just fact)
+  queryFacts t repo q = withShard t repo $ GleanService.queryFacts repo q
   firstFreeId t repo = withShard t repo $ GleanService.firstFreeId repo
   factIdRange t repo = withShard t repo $ GleanService.factIdRange repo
   getSchemaInfo t repo req = withShard t repo $

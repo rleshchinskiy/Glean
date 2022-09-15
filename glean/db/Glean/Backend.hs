@@ -72,9 +72,9 @@ import Glean.Internal.Types (StoredSchema(..))
 import Glean.Logger
 import qualified Glean.Query.UserQuery as UserQuery
 import qualified Glean.Query.Derive as Derive
-import Glean.RTS (Fid(..))
 import qualified Glean.RTS.Foreign.Inventory as Inventory
 import qualified Glean.RTS.Foreign.Lookup as Lookup
+import Glean.RTS.Types (Fid(..), invalidFid)
 import qualified Glean.Types as Thrift
 import Glean.Util.ConfigProvider
 import Glean.Util.Observed as Observed
@@ -170,6 +170,9 @@ instance Backend LoggingBackend where
   queryFact (LoggingBackend env) repo id =
     loggingAction (runLogRepo "queryFact" env repo) (const mempty) $
       queryFact env repo id
+  queryFacts (LoggingBackend env) repo q =
+    loggingAction (runLogRepo "queryFacts" env repo) (const mempty) $
+      queryFacts env repo q
   firstFreeId (LoggingBackend env) repo =
     loggingAction (runLogRepo "firstFreeId" env repo) (const mempty) $
       firstFreeId env repo
@@ -278,6 +281,14 @@ instance Backend LoggingBackend where
 instance Backend Database.Env where
   queryFact env repo id = readDatabase env repo $ \_ db ->
     Lookup.lookupFact db (Fid id)
+
+  queryFacts env repo Thrift.QueryFacts{..} = readDatabase env repo $ \_ db ->
+    Lookup.serialize db $ Lookup.Limits
+      { limitFrom = Fid queryFacts_first_id
+      , limitUpto = maybe invalidFid Fid queryFacts_max_id
+      , limitMaxFacts = maybe maxBound fromIntegral queryFacts_max_results
+      , limitMaxBytes = maybe maxBound fromIntegral queryFacts_max_bytes
+      }
 
   firstFreeId env repo =
     fromFid <$> readDatabase env repo (const Lookup.firstFreeId)
@@ -538,6 +549,7 @@ instance LocalOrRemote ThriftBackend where
 
 instance Backend (Some LocalOrRemote) where
   queryFact (Some backend) = queryFact backend
+  queryFacts (Some backend) = queryFacts backend
   firstFreeId (Some backend) = firstFreeId backend
   factIdRange (Some backend) = factIdRange backend
   getSchemaInfo (Some backend) = getSchemaInfo backend

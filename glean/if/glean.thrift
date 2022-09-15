@@ -419,6 +419,13 @@ union Outcome {
   2: Failure failure;
 }
 
+struct QueryFacts {
+  1: Id first_id;
+  2: optional Id max_id;
+  3: optional i64 max_results;
+  4: optional i64 max_bytes;
+}
+
 struct UserQueryCont {
   3: binary continuation;
   4: i64 nextId;
@@ -1094,6 +1101,10 @@ service GleanService extends fb303.FacebookService {
 
   // Return Fact 0 "" "" when nothing found
   Fact queryFact(1: Repo repo, 2: Id id) throws (1: UnknownDatabase u);
+
+  Batch queryFacts(1: Repo repo, 2: QueryFacts query) throws (
+    1: UnknownDatabase u
+  );
 
   // Get lower and upper bounds on fact ids in the database. The database is
   // guaranteed to have no fact ids < start or >= finish and fact ids within

@@ -33,6 +33,7 @@ CXX_SOURCES_glean_cpp_if_internal = \
     glean/if/gen-cpp2/internal_data.cpp
 
 CXX_SOURCES_glean_cpp_rts = \
+    glean/rts/batch.cpp \
     glean/rts/binary.cpp \
     glean/rts/cache.cpp \
     glean/rts/define.cpp \

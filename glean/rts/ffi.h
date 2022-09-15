@@ -235,6 +235,20 @@ const char *glean_lookup_fact(
   size_t *value_size
 );
 
+const char *glean_lookup_serialize(
+  Lookup *lookup,
+  int64_t from,
+  int64_t upto,
+  size_t max_results,
+  size_t max_bytes,
+  int64_t *first_id,
+  size_t *count,
+  void **facts,
+  size_t *facts_size,
+  int64_t **ids,
+  size_t *ids_size
+);
+
 const char *glean_define_fact(
   Define *facts,
   glean_predicate_id_t predicate,

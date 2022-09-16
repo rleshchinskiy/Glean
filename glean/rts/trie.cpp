@@ -65,6 +65,7 @@ struct Tree::Node {
     const Fact *fact);
 
   const char *typeString() const;
+  void validate() const;
   void validate(const Node *parent, unsigned int index, unsigned int byte) const;
 
   void keys(std::string& buf, std::vector<std::string>& v) const;
@@ -480,7 +481,7 @@ Tree::Node * FOLLY_NULLABLE * FOLLY_NULLABLE Tree::Node16::insert(
         c->bytes[i] = bytes[i];
         c->indices[bytes[i]] = i;
         c->children[i] = children[i];
-        c->children[i]->parent = &node;
+        c->children[i]->parent = &c->node;
       }
       p->node.parent = &c->node;
       p->node.index = i;
@@ -492,7 +493,7 @@ Tree::Node * FOLLY_NULLABLE * FOLLY_NULLABLE Tree::Node16::insert(
         c->indices[bytes[i]] = i+1;
         c->children[i+1] = children[i];
         c->children[i+1]->index = i+1;
-        c->children[i+1]->parent = &node;
+        c->children[i+1]->parent = &c->node;
         ++i;
       }
       std::free(this);
@@ -871,7 +872,23 @@ const char *Tree::Node::typeString() const {
   }
 }
 
+void Tree::Node::validate() const {
+  switch (type) {
+    case N0:
+    case N4:
+    case N16:
+    case N48:
+    case N256:
+      break;
+    default:
+      LOG(ERROR) << "Node::validate: invalid type " << static_cast<int>(type);
+      return;
+  }
+  dispatch([](auto p) { p->validate(); });
+}
+
 void Tree::Node::validate(const Node *p, unsigned int i, unsigned int b) const {
+  validate();
   if (parent != p) {
     LOG(ERROR) << typeString()
       << "::validate: invalid parent (expected " << p->typeString()
@@ -882,7 +899,6 @@ void Tree::Node::validate(const Node *p, unsigned int i, unsigned int b) const {
       << ", expected " << int(i)
       << ", got " << int(index) << ")";
   }
-  dispatch([](auto p) { p->validate(); });
 }
 
 void Tree::Node0::validate() const {

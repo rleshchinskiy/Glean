@@ -66,7 +66,7 @@ flag opt
      default: False
 
 flag benchmarks
-     default: False
+     default: True
 
 -- run tests that require clang
 flag clang-tests
@@ -1053,6 +1053,22 @@ executable glean
         json,
         split,
 
+executable glean-gen-batch
+    import: fb-haskell, fb-cpp, deps, exe
+    hs-source-dirs: glean/tools/genbatch
+    main-is: GenBatch.hs
+    ghc-options: -main-is GenBatch
+    extra-libraries: stdc++
+    build-depends:
+        glean:client-hs,
+        glean:core,
+        glean:db,
+        glean:lib,
+        glean:rts,
+        glean:schema,
+        glean:stubs,
+        glean:util,
+        
 executable glean-search
     import: fb-haskell, fb-cpp, deps, exe
     hs-source-dirs: glean/tools/search
@@ -1387,6 +1403,38 @@ executable compile-bench
         statistics,
         vector-algorithms
 
+executable factsetwrite-bench
+    import: fb-haskell, deps, exe
+    if !flag(benchmarks)
+       buildable: False
+    hs-source-dirs: glean/bench
+    main-is: FactSetWriteBench.hs
+    ghc-options: -main-is FactSetWriteBench
+    build-depends:
+        glean:bench-util,
+        glean:client-hs,
+        glean:core,
+        glean:schema,
+        glean:test-lib,
+        criterion
+
+executable factsetcopy-bench
+    import: fb-haskell, deps, exe
+    if !flag(benchmarks)
+       buildable: False
+    hs-source-dirs: glean/bench
+    main-is: FactSetCopy.hs
+    ghc-options: -main-is FactSetCopy
+    build-depends:
+        glean:bench-util,
+        glean:client-hs,
+        glean:client-hs-local,
+        glean:core,
+        glean:db,
+        glean:schema,
+        glean:test-lib,
+        glean:util
+
 -- -----------------------------------------------------------------------------
 -- Tests
 
@@ -1395,6 +1443,7 @@ library test-lib
     visibility: private
     hs-source-dirs: glean/test/lib
     exposed-modules:
+        RandomFacts
         TestBatch
         TestDB
         TestData

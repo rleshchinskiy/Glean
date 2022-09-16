@@ -142,17 +142,17 @@ FactSet copyFactSetWithRandomRepeats(
     const FactSet& facts) {
   RNG rng(seed);
   FactSet copy(facts.startingId());
-  std::vector<const Fact *> copied;
+  std::vector<Fact::Ref> copied;
   copied.reserve(facts.size());
 
   auto i = facts.begin();
   while (i != facts.end()) {
-    const auto& fact =
+    const auto fact =
       rng.freq(repeatFreq) && !copied.empty()
-        ? *copied[rng.number(0,copied.size())]
+        ? copied[rng.number(0,copied.size())]
         : *i++;
-    const auto id = copy.define(fact.type(), fact.clause());
-    CHECK_EQ(id.toWord(), fact.id().toWord());
+    const auto id = copy.define(fact.type, fact.clause);
+    CHECK_EQ(id.toWord(), fact.id.toWord());
   }
 
   return copy;

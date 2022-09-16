@@ -305,7 +305,15 @@ void glean_factset_free(
   FactSet *facts
 );
 
+size_t glean_factset_fact_count(
+  FactSet *facts
+);
+
 size_t glean_factset_fact_memory(
+  FactSet *facts
+);
+
+size_t glean_factset_allocated_memory(
   FactSet *facts
 );
 
@@ -341,6 +349,28 @@ const char *glean_factset_append(
   FactSet *target,
   FactSet *source
 );
+
+const char *glean_factset_clone_contiguous(
+  Lookup *lookup,
+  FactSet **facts
+);
+
+const char *glean_factset_random(
+  int64_t first_id,
+  int64_t seed,
+  size_t predicates,
+  const int64_t *pids,
+  const size_t *wanted,
+  const size_t *sizes,
+  const SharedSubroutine **gens,
+  FactSet **facts
+);
+
+const char *glean_factset_copy_with_random_repeats(
+  int64_t seed,
+  double repeatFreq,
+  const FactSet *from,
+  FactSet **facts);
 
 const char *glean_stacked_lookup_new(
   Lookup *base,

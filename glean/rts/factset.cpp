@@ -38,10 +38,26 @@ struct FactSet::Index {
   folly::Synchronized<DenseMap<Pid, std::unique_ptr<entry_t>>> index;
 };
 
-FactSet::FactSet(Id start) : starting_id(start), fact_memory(0) {}
+FactSet::FactSet(Id start) : starting_id(start) {}
 FactSet::FactSet(FactSet&&) = default;
 FactSet& FactSet::operator=(FactSet&&) = default;
 FactSet::~FactSet() noexcept = default;
+
+size_t FactSet::allocatedMemory() const noexcept {
+  size_t n = facts.allocatedMemory() + keys.allocatedMemory();
+  for (const auto& k : keys) {
+    n += k.second.getAllocatedMemorySize();
+  }
+  return n;
+}
+
+size_t FactSet::Facts::allocatedMemory() const noexcept {
+  size_t n = facts.capacity() * sizeof(facts[0]);
+  for (const auto& fact : facts) {
+    n += fact->size();
+  }
+  return n;
+}
 
 struct FactSet::CachedPredicateStats {
   struct Data {
@@ -64,7 +80,7 @@ PredicateStats FactSet::predicateStats() const {
     wlock->stats.reserve(keys.low_bound(), keys.high_bound());
     for (const auto& fact
           : folly::range(facts.begin() + wlock->upto, facts.end())) {
-      wlock->stats[fact->type()] += MemoryStats::one(fact->clause().size());
+      wlock->stats[fact.type()] += MemoryStats::one(fact.clause().size());
     }
     wlock->upto = facts.size();
     return wlock->stats;
@@ -87,7 +103,7 @@ Pid FactSet::typeById(Id id) {
   if (id >= starting_id) {
     const auto i = distance(starting_id, id);
     if (i < facts.size()) {
-      return facts[i]->type();
+      return facts[i].type();
     }
   }
   return Pid::invalid();
@@ -97,7 +113,7 @@ bool FactSet::factById(Id id, std::function<void(Pid, Fact::Clause)> f) {
   if (id >= starting_id) {
     const auto i = distance(starting_id, id);
     if (i < facts.size()) {
-      f(facts[i]->type(), facts[i]->clause());
+      f(facts[i].type(), facts[i].clause());
       return true;
     }
   }
@@ -214,6 +230,9 @@ std::unique_ptr<FactIterator> FactSet::seek(
             map.insert({fact->key(), fact});
 #endif
           }
+#if USE_ROART
+          map.validate();
+#endif
         }
       });
     }
@@ -260,12 +279,11 @@ Id FactSet::define(Pid type, Fact::Clause clause, Id) {
     error("key too large: {}", clause.key_size);
   }
   const auto next_id = firstFreeId();
-  auto fact = Fact::create({next_id, type, clause});
+  auto fact = facts.alloc(next_id, type, clause);
   auto& key_map = keys[type];
   const auto r = key_map.insert(fact.get());
   if (r.second) {
-    fact_memory += fact->size();
-    facts.push_back(std::move(fact));
+    facts.commit(std::move(fact));
     return next_id;
   } else {
     return
@@ -303,7 +321,7 @@ FactSet::serializeReorder(folly::Range<const uint64_t *> order) const {
   for (auto i : order) {
     assert(i >= startingId().toWord() &&
            i - startingId().toWord() < facts.size());
-    facts[i - startingId().toWord()]->serialize(output);
+    facts[i - startingId().toWord()].serialize(output);
   }
 
   thrift::Batch batch;
@@ -368,16 +386,11 @@ FactSet FactSet::rebase(
 void FactSet::append(FactSet other) {
   assert(appendable(other));
 
-  facts.insert(
-    facts.end(),
-    std::make_move_iterator(other.facts.begin()),
-    std::make_move_iterator(other.facts.end()));
+  facts.append(std::move(other.facts));
 
   keys.merge(std::move(other.keys), [](auto& left, const auto& right) {
     left.insert(right.begin(), right.end());
   });
-
-  fact_memory += other.fact_memory;
 }
 
 bool FactSet::appendable(const FactSet& other) const {
@@ -401,6 +414,28 @@ bool FactSet::appendable(const FactSet& other) const {
 
   return true;
 }
+
+FactSet FactSet::cloneContiguous(Lookup& lookup) {
+  auto iter = lookup.enumerate();
+  auto fact = iter->get();
+  if (!fact) {
+    return FactSet(lookup.firstFreeId());
+  }
+
+  FactSet facts(fact.id);
+  auto expected = fact.id;
+
+  while (fact && fact.id == expected) {
+    const auto k = facts.define(fact.type, fact.clause);
+    assert(k == expected);
+    ++expected;
+    iter->next();
+    fact = iter->get();
+  }
+
+  return facts;
+}
+
 
 bool FactSet::sanityCheck() const {
   // TODO: implement

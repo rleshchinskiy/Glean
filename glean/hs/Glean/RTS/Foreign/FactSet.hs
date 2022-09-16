@@ -9,7 +9,9 @@
 module Glean.RTS.Foreign.FactSet
   ( FactSet
   , new
+  , factCount
   , factMemory
+  , allocatedMemory
   , predicateStats
   , firstFreeId
   , serialize
@@ -17,20 +19,29 @@ module Glean.RTS.Foreign.FactSet
   , append
   , rebase
   , renameFacts
+
+  , cloneContiguous
+
+  , RandomParams(..)
+  , random
+  , copyWithRandomRepeats
   ) where
 
 import Control.Exception
+import Data.Coerce (coerce)
 import Data.Int
-import Data.Vector.Storable as Vector
+import qualified Data.Vector.Storable as V
 import Data.Word
 import Foreign.C.String
 import Foreign.C.Types
 import Foreign.ForeignPtr
+import Foreign.Marshal.Array (withArray)
 import Foreign.Ptr
 
 import Util.FFI
 
 import Glean.FFI
+import Glean.RTS.Foreign.Bytecode (Subroutine)
 import Glean.RTS.Foreign.Define
 import Glean.RTS.Foreign.Inventory (Inventory)
 import Glean.RTS.Foreign.Lookup (Lookup(..), CanLookup(..))
@@ -59,8 +70,15 @@ instance CanDefine FactSet where
 new :: Fid -> IO FactSet
 new next_id = construct $ invoke $ glean_factset_new next_id
 
-factMemory :: FactSet -> IO Int
+factCount :: FactSet -> IO Word64
+factCount facts = fromIntegral <$> with facts glean_factset_fact_count
+
+factMemory :: FactSet -> IO Word64
 factMemory facts = fromIntegral <$> with facts glean_factset_fact_memory
+
+allocatedMemory :: FactSet -> IO Word64
+allocatedMemory facts =
+  fromIntegral <$> with facts glean_factset_allocated_memory
 
 predicateStats :: FactSet -> IO [(Pid, Thrift.PredicateStats)]
 predicateStats facts = with facts
@@ -82,19 +100,19 @@ serialize facts =
   with facts $ \facts_ptr -> do
   mkBatch $ invoke $ glean_factset_serialize facts_ptr
 
-serializeReorder :: FactSet -> Vector Int64 -> IO Thrift.Batch
+serializeReorder :: FactSet -> V.Vector Int64 -> IO Thrift.Batch
 serializeReorder facts order =
   with facts $ \facts_ptr -> do
-  unsafeWith order $ \order_ptr -> do
+  V.unsafeWith order $ \order_ptr -> do
     mkBatch $ invoke $ glean_factset_serializeReorder
       facts_ptr
       order_ptr
-      (fromIntegral (Vector.length order))
+      (fromIntegral (V.length order))
 
 rebase :: Inventory -> Thrift.Subst -> LookupCache -> FactSet -> IO FactSet
 rebase inventory Thrift.Subst{..} cache facts =
   with inventory $ \inventory_ptr ->
-  unsafeWith subst_ids $ \ids_ptr ->
+  V.unsafeWith subst_ids $ \ids_ptr ->
   with cache $ \cache_ptr ->
   with facts $ \facts_ptr ->
   construct $ invoke $
@@ -102,7 +120,7 @@ rebase inventory Thrift.Subst{..} cache facts =
       facts_ptr
       inventory_ptr
       (Fid subst_firstId)
-      (fromIntegral $ Vector.length subst_ids)
+      (fromIntegral $ V.length subst_ids)
       ids_ptr
       cache_ptr
 
@@ -127,12 +145,63 @@ renameFacts inventory base next batch = do
   subst <- defineUntrustedBatch (stacked base added) inventory batch
   return (added, subst)
 
+cloneContiguous :: CanLookup l => l -> IO FactSet
+cloneContiguous look = withLookup look
+  $ construct . invoke . glean_factset_clone_contiguous
+
+
+data RandomParams = RandomParams
+  { randomParamsWanted :: Int
+  , randomParamsSizeCap :: Int
+  }
+
+random
+  :: Fid
+  -> Maybe Word32
+  -> [(Pid, RandomParams, Subroutine ())]
+  -> IO FactSet
+random firstId seed xs =
+  withArray preds $ \preds_ptr ->
+  withArray (map (fromIntegral . randomParamsWanted) params) $ \wanted_ptr ->
+  withArray (map (fromIntegral . randomParamsSizeCap) params) $ \sizes_ptr ->
+  withMany with gens $ \gen_ps ->
+  withArray gen_ps $ \gens_ptr ->
+  construct $ invoke $ glean_factset_random
+    firstId
+    (maybe (-1) fromIntegral seed)
+    (fromIntegral n)
+    preds_ptr
+    wanted_ptr
+    sizes_ptr
+    gens_ptr
+  where
+    (preds, params, gens) = unzip3 xs
+    !n = length xs
+
+copyWithRandomRepeats
+  :: Maybe Word32
+  -> Double
+  -> FactSet
+  -> IO FactSet
+copyWithRandomRepeats seed repeatFreq facts =
+  with facts $ \facts_ptr ->
+  construct $ invoke $ glean_factset_copy_with_random_repeats
+    (maybe (-1) fromIntegral seed)
+    (coerce repeatFreq)
+    facts_ptr
+
 foreign import ccall unsafe glean_factset_new
   :: Fid -> Ptr (Ptr FactSet) -> IO CString
 foreign import ccall unsafe "&glean_factset_free" glean_factset_free
   :: FunPtr (Ptr FactSet -> IO ())
 
+foreign import ccall unsafe glean_factset_fact_count
+  :: Ptr FactSet -> IO CSize
+
 foreign import ccall unsafe glean_factset_fact_memory
+  :: Ptr FactSet -> IO CSize
+
+foreign import ccall unsafe glean_factset_allocated_memory
   :: Ptr FactSet -> IO CSize
 
 foreign import ccall safe glean_factset_predicateStats
@@ -182,3 +251,26 @@ foreign import ccall unsafe glean_factset_rebase
 
 foreign import ccall unsafe glean_factset_append
   :: Ptr FactSet -> Ptr FactSet -> IO CString
+
+foreign import ccall safe glean_factset_clone_contiguous
+  :: Ptr Lookup
+  -> Ptr (Ptr FactSet)
+  -> IO CString
+
+foreign import ccall safe glean_factset_random
+  :: Fid
+  -> Int64
+  -> CSize
+  -> Ptr Pid
+  -> Ptr CSize
+  -> Ptr CSize
+  -> Ptr (Ptr (Subroutine ()))
+  -> Ptr (Ptr FactSet)
+  -> IO CString
+
+foreign import ccall safe glean_factset_copy_with_random_repeats
+  :: Int64
+  -> CDouble
+  -> Ptr FactSet
+  -> Ptr (Ptr FactSet)
+  -> IO CString

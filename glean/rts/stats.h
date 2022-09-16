@@ -120,6 +120,20 @@ void marshal(
   uint64_t **counts,
   uint64_t **sizes);
 
+template<typename T>
+size_t allocatedMemory(const std::vector<T>& v) {
+  return v.capacity() * sizeof(T);
+}
+
+template<typename T, typename F>
+size_t allocatedMemory(const std::vector<T>& v, F&& f) {
+  size_t n = allocatedMemory(v);
+  for (const auto& x : v) {
+    n += f(x);
+  }
+  return n;
+}
+
 }
 }
 }

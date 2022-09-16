@@ -23,6 +23,7 @@
 #include "glean/rts/ownership.h"
 #include "glean/rts/ownership/slice.h"
 #include "glean/rts/query.h"
+#include "glean/rts/random.h"
 #include "glean/rts/sanity.h"
 #include "glean/rts/stacked.h"
 #include "glean/rts/string.h"
@@ -492,8 +493,16 @@ void glean_factset_free(FactSet *facts) {
   ffi::free_(facts);
 }
 
+size_t glean_factset_fact_count(FactSet *facts) {
+  return facts->size();
+}
+
 size_t glean_factset_fact_memory(FactSet *facts) {
   return facts->factMemory();
+}
+
+size_t glean_factset_allocated_memory(FactSet *facts) {
+  return sizeof(FactSet) + facts->allocatedMemory();
 }
 
 const char *glean_factset_predicateStats(
@@ -584,6 +593,50 @@ const char *glean_factset_append(
   });
 }
 
+const char *glean_factset_clone_contiguous(
+    Lookup *lookup,
+    FactSet **facts) {
+  return ffi::wrap([=] {
+    *facts = new FactSet(FactSet::cloneContiguous(*lookup));
+  });
+}
+
+const char *glean_factset_random(
+    int64_t first_id,
+    int64_t seed,
+    size_t predicates,
+    const int64_t *pids,
+    const size_t *wanted,
+    const size_t *sizes,
+    const SharedSubroutine **gens,
+    FactSet **facts) {
+  return ffi::wrap([=] {
+    folly::F14FastMap<Pid, RandomParams> ps;
+    ps.reserve(predicates);
+    for (size_t i = 0; i < predicates; ++i) {
+      ps.emplace(Pid::fromThrift(pids[i]), RandomParams{wanted[i], sizes[i], gens[i]->value});
+    }
+    *facts = new FactSet(
+      randomFactSet(
+        Id::fromThrift(first_id),
+        seed != -1 ? folly::Optional<uint32_t>(seed) : folly::none,
+        std::move(ps)));
+  });
+}
+
+const char *glean_factset_copy_with_random_repeats(
+    int64_t seed,
+    double repeatFreq,
+    const FactSet *from,
+    FactSet **facts) {
+  return ffi::wrap([=] {
+    *facts = new FactSet(
+      copyFactSetWithRandomRepeats(
+        seed != -1 ? folly::Optional<uint32_t>(seed) : folly::none,
+        repeatFreq,
+        *from));
+  });
+}
 
 const char *glean_stacked_lookup_new(
     Lookup *base,

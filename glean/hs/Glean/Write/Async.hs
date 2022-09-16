@@ -194,7 +194,7 @@ writeFacts :: Writer -> FactBuilder -> IO ()
 writeFacts w builder = maybeFlush w (const $ return ()) $ \facts -> do
   extendFacts facts builder
   mem <- factsMemory facts
-  return $ if mem > writerMaxSize (writerSettings w)
+  return $ if mem > fromIntegral (writerMaxSize $ writerSettings w)
     then FlushFacts
     else DoNotFlushFacts
 

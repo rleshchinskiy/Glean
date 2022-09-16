@@ -19,6 +19,7 @@ import Data.Int
 import Data.IORef
 import Data.Maybe
 import qualified Data.Vector.Storable as Vector
+import Data.Word (Word64)
 import Control.Monad
 import Control.Monad.IO.Class
 #if !MIN_VERSION_base(4,13,0)
@@ -105,7 +106,7 @@ serializeFacts Facts{..} = do
   return batch { Thrift.batch_owned = fmap Vector.fromList ownership }
 
 -- | Return a rough estimate of how much memory is used by the facts.
-factsMemory :: Facts -> IO Int
+factsMemory :: Facts -> IO Word64
 factsMemory = FactSet.factMemory . factsData
 
 -- | A monad for creating fact batches.

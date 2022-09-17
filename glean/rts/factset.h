@@ -142,8 +142,9 @@ private:
       return starting_id;
     }
 
+#if 0
     struct deref {
-      Fact::Ref operator()(const Fact::unique_ptr& p) const {
+      Fact::Ref operator()(const roart::Tree::Value::unique_ptr& p) const {
         return p->ref();
       }
     };
@@ -151,7 +152,7 @@ private:
     using const_iterator =
       boost::transform_iterator<
         deref,
-        std::vector<Fact::unique_ptr>::const_iterator>;
+        std::vector<roart::Tree::Value::unique_ptr>::const_iterator>;
     
     const_iterator begin() const {
       return boost::make_transform_iterator(facts.begin(), deref());
@@ -165,20 +166,59 @@ private:
       assert (i < facts.size());
       return facts[i]->ref();
     }
+#endif
+    struct deref {
+      const roart::Tree::Value& operator()(const roart::Tree::Value::unique_ptr& p) const {
+        return *p;
+      }
+    };
+
+    using const_iterator =
+      boost::transform_iterator<
+        deref,
+        std::vector<roart::Tree::Value::unique_ptr>::const_iterator>;
+
+    const_iterator begin() const {
+      return boost::make_transform_iterator(facts.begin(), deref());
+    }
+
+    const_iterator end() const {
+      return boost::make_transform_iterator(facts.end(), deref());
+    }
+
+    const_iterator lower_bound(Id id) const {
+      return begin() +
+        (id <= startingId()
+          ? 0
+          : std::min(distance(startingId(), id), size()));
+    }
+
+    const_iterator upper_bound(Id id) const {
+      return begin() +
+        (id < startingId()
+          ? 0
+          : std::min(distance(startingId(), id)+1, size()));
+    }
+
+    const roart::Tree::Value& operator[](size_t i) const {
+      assert (i < facts.size());
+      return *facts[i];
+    }
 
     void clear() {
       facts.clear();
       fact_memory = 0;
     }
 
-    using Token = Fact::unique_ptr;
+    //using Token = Fact::unique_ptr;
+    using Token = roart::Tree::Value::unique_ptr;
 
-    Token alloc(Id id, Pid type, Fact::Clause clause) {
-      return Fact::create({id, type, clause});
+    Token alloc(Fact::Ref fact) {
+      return roart::Tree::Value::alloc(fact);
     }
 
     void commit(Token token) {
-      fact_memory += token->size();
+      fact_memory += token->key_size + token->value_size;
       facts.push_back(std::move(token));
     }
 
@@ -199,7 +239,8 @@ private:
 
   private:
     Id starting_id;
-    std::vector<Fact::unique_ptr> facts;
+    // std::vector<Fact::unique_ptr> facts;
+    std::vector<roart::Tree::Value::unique_ptr> facts;
     size_t fact_memory = 0;
   };
 
@@ -221,6 +262,7 @@ public:
     return facts.empty();
   }
 
+#if 0
   using const_iterator = Facts::const_iterator;
 
   const_iterator begin() const {
@@ -246,6 +288,7 @@ public:
         ? 0
         : std::min(distance(facts.startingId(), id)+1, facts.size()));
   }
+#endif
 
   /// Return the number of bytes occupied by facts.
   size_t factMemory() const noexcept {
@@ -346,11 +389,13 @@ private:
   struct CachedPredicateStats;
   mutable OnDemand<CachedPredicateStats> predicate_stats;
 
+#if 0
   /// Index for prefix seeks. It is lazily initialised and slow as we typically
   /// don't do seeks on FactSets.
   struct Index;
   OnDemand<Index> index;
     /// Type of index maps
+#endif
 };
 
 }

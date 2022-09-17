@@ -18,46 +18,6 @@ namespace rts {
 
 namespace roart {
 
-/*
-struct Value {
-  Id id;
-  Pid type;
-  uint32_t key_size;
-  uint32_t value_size;
-
-  folly::ByteRange value() const {
-    return {reinterpret_cast<const unsigned char *>(this+1), value_size};
-  }
-
-  struct deleter {
-    void operator()(Value *p) const noexcept {
-      std::free(p);
-    }
-  };
-
-  using unique_ptr = std::unique_ptr<Value, deleter>;
-
-  static unique_ptr alloc(const Fact *fact) {
-    const auto clause = fact->clause();
-    auto p = static_cast<Value *>(std::aligned_alloc(
-      alignof(Value),
-      sizeof(Value) + clause.key_size));
-    p->id = fact->id();
-    p->type = fact->type();
-    p->key_size = clause.key_size;
-    p->value_size = clause.value_size;
-    if (clause.value_size != 0) {
-      std::copy(
-        clause.value().begin(),
-        clause.value().end(),
-        reinterpret_cast<unsigned char *>(p+1));
-    }
-  }
-};
-*/
-
-using Value = Fact;
-
 class Tree final {
   struct Node;
   struct Node0;
@@ -66,6 +26,54 @@ class Tree final {
   struct Node48;
   struct Node256;
 
+public:
+  struct Value {
+    Id id;
+    Pid type;
+    uint32_t key_size;
+    uint32_t value_size;
+    mutable Node *node;
+
+    size_t size() const {
+      return sizeof(Value) + value_size;
+    }
+
+    folly::ByteRange value() const {
+      return {reinterpret_cast<const unsigned char *>(this+1), value_size};
+    }
+
+    Fact::Ref get(
+      FactIterator::Demand demand,
+      std::vector<unsigned char>& buf) const;
+
+    struct deleter {
+      void operator()(Value *p) const noexcept {
+        std::free(p);
+      }
+    };
+
+    using unique_ptr = std::unique_ptr<Value, deleter>;
+
+    static unique_ptr alloc(Fact::Ref fact) {
+      const auto clause = fact.clause;
+      unique_ptr p(static_cast<Value *>(std::aligned_alloc(
+        alignof(Value),
+        sizeof(Value) + clause.value_size)));
+      p->id = fact.id;
+      p->type = fact.type;
+      p->key_size = clause.key_size;
+      p->value_size = clause.value_size;
+      if (clause.value_size != 0) {
+        std::copy(
+          clause.value().begin(),
+          clause.value().end(),
+          reinterpret_cast<unsigned char *>(p.get()+1));
+      }
+      return p;
+    }
+  };
+
+private:
   Node * FOLLY_NULLABLE root = nullptr;
   uint32_t max_key_size = 0;
   uint32_t max_value_size = 0;
@@ -105,6 +113,8 @@ public:
         uint32_t buf_size,
         folly::ByteRange start,
         size_t prefixlen = 0);
+
+    Id id() const;
 
     bool done() const { return node == nullptr; }
     // const std::string& getKey() const { return buf; }
@@ -174,6 +184,8 @@ public:
     if (this != &other) {
       clear();
       root = other.root;
+      max_key_size = other.max_key_size;
+      max_value_size = other.max_value_size;
       count = other.count;
       keymem = other.keymem;
       other.root = nullptr;
@@ -203,9 +215,11 @@ public:
   Iterator lower_bound(folly::ByteRange key, size_t prefix_size) const;
 
   const Value * FOLLY_NULLABLE insert(folly::ByteRange key, const Value *fact);
+  /*
   const Value * FOLLY_NULLABLE insert(const Fact *fact) {
     return insert(fact->key(), fact);
   }
+  */
 
   std::vector<std::string> keys() const;
 

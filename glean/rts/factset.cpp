@@ -12,6 +12,7 @@ namespace facebook {
 namespace glean {
 namespace rts {
 
+#if 0
 struct FactSet::Index {
   /// Type of index maps
 #if USE_ROART
@@ -37,6 +38,7 @@ struct FactSet::Index {
 
   folly::Synchronized<DenseMap<Pid, std::unique_ptr<entry_t>>> index;
 };
+#endif
 
 FactSet::FactSet(Id start) : facts(start) {}
 FactSet::FactSet(FactSet&&) = default;
@@ -47,7 +49,8 @@ size_t FactSet::allocatedMemory() const noexcept {
   size_t n = facts.allocatedMemory() + keys.allocatedMemory();
   for (const auto& k : keys) {
     // n += k.second.getAllocatedMemorySize();
-    n += k.second.stats().bytes;
+    const auto stats = k.second.stats();
+    n += stats.bytes + stats.prefix_length;
   }
   return n;
 }
@@ -81,7 +84,8 @@ PredicateStats FactSet::predicateStats() const {
     wlock->stats.reserve(keys.low_bound(), keys.high_bound());
     for (const auto& fact
           : folly::range(facts.begin() + wlock->upto, facts.end())) {
-      wlock->stats[fact.type] += MemoryStats::one(fact.clause.size());
+      wlock->stats[fact.type]
+        += MemoryStats::one(fact.key_size + fact.value_size);
     }
     wlock->upto = facts.size();
     return wlock->stats;
@@ -94,7 +98,7 @@ Id FactSet::idByKey(Pid type, folly::ByteRange key) {
   if (const auto p = keys.lookup(type)) {
     const auto i = p->find(key);
     if (i != p->end()) {
-      return (*i)->id();
+      return i.id();
     }
   }
   return Id::invalid();
@@ -114,7 +118,9 @@ bool FactSet::factById(Id id, std::function<void(Pid, Fact::Clause)> f) {
   if (id >= facts.startingId()) {
     const auto i = distance(facts.startingId(), id);
     if (i < facts.size()) {
-      f(facts[i].type, facts[i].clause);
+      std::vector<unsigned char> buf;
+      const auto ref = facts[i].get(FactIterator::Demand::KeyValue, buf);
+      f(ref.type, ref.clause);
       return true;
     }
   }
@@ -128,9 +134,10 @@ Interval FactSet::count(Pid pid) const {
 
 std::unique_ptr<FactIterator> FactSet::enumerate(Id from, Id upto) {
   struct Iterator final : FactIterator {
-    using iter_t = FactSet::const_iterator;
+    using iter_t = Facts::const_iterator;
     iter_t pos;
     const iter_t end;
+    std::vector<unsigned char> buf;
 
     Iterator(iter_t p, iter_t e)
       : pos(p), end(e) {}
@@ -140,8 +147,10 @@ std::unique_ptr<FactIterator> FactSet::enumerate(Id from, Id upto) {
       ++pos;
     }
 
-    Fact::Ref get(Demand) override {
-      return pos != end ? *pos : Fact::Ref::invalid();
+    Fact::Ref get(Demand demand) override {
+      return pos != end
+        ? pos->get(demand, buf)
+        : Fact::Ref::invalid();
     }
 
     std::optional<Id> lower_bound() override { return std::nullopt; }
@@ -149,15 +158,16 @@ std::unique_ptr<FactIterator> FactSet::enumerate(Id from, Id upto) {
   };
 
   return std::make_unique<Iterator>(
-    lower_bound(from),
-    upto ? lower_bound(upto) : end());
+    facts.lower_bound(from),
+    upto ? facts.lower_bound(upto) : facts.end());
 }
 
 std::unique_ptr<FactIterator> FactSet::enumerateBack(Id from, Id downto) {
   struct BackIterator final : FactIterator {
-    using iter_t = FactSet::const_iterator;
+    using iter_t = Facts::const_iterator;
     iter_t pos;
     const iter_t end;
+    std::vector<unsigned char> buf;
 
     BackIterator(iter_t p, iter_t e)
       : pos(p), end(e) {}
@@ -167,11 +177,11 @@ std::unique_ptr<FactIterator> FactSet::enumerateBack(Id from, Id downto) {
       --pos;
     }
 
-    Fact::Ref get(Demand) override {
+    Fact::Ref get(Demand demand) override {
       if (pos != end) {
         auto i = pos;
         --i;
-        return *i;
+        return i->get(demand, buf);
       } else {
         return Fact::Ref::invalid();
       }
@@ -182,14 +192,20 @@ std::unique_ptr<FactIterator> FactSet::enumerateBack(Id from, Id downto) {
   };
 
   return std::make_unique<BackIterator>(
-    from ? lower_bound(from) : end(),
-    lower_bound(downto));
+    from ? facts.lower_bound(from) : facts.end(),
+    facts.lower_bound(downto));
 }
 
 std::unique_ptr<FactIterator> FactSet::seek(
     Pid type,
     folly::ByteRange start,
     size_t prefix_size) {
+  if (const auto tree = keys.lookup(type)) {
+    auto it = tree->lower_bound(start, prefix_size);
+    return std::make_unique<roart::Tree::Iterator>(std::move(it));
+  } else {
+    return std::make_unique<EmptyIterator>();
+  }
 #if !USE_ROART
   struct SeekIterator : FactIterator {
     explicit SeekIterator(Index::map_t::iterator b, Index::map_t::iterator e)
@@ -214,6 +230,7 @@ std::unique_ptr<FactIterator> FactSet::seek(
   };
 #endif
 
+#if 0
   assert(prefix_size <= start.size());
 
   if (const auto p = keys.lookup(type)) {
@@ -257,6 +274,8 @@ std::unique_ptr<FactIterator> FactSet::seek(
   } else {
     return std::make_unique<EmptyIterator>();
   }
+  return std::make_unique<EmptyIterator>();
+#endif
 }
 
 std::unique_ptr<FactIterator> FactSet::seekWithinSection(
@@ -280,24 +299,27 @@ Id FactSet::define(Pid type, Fact::Clause clause, Id) {
     error("key too large: {}", clause.key_size);
   }
   const auto next_id = firstFreeId();
-  auto fact = facts.alloc(next_id, type, clause);
+  // auto fact = facts.alloc(next_id, type, clause);
+  auto fact = facts.alloc(Fact::Ref{next_id, type, clause});
   auto& key_map = keys[type];
-  const auto r = key_map.insert(fact.get());
+  // const auto r = key_map.insert(fact.get());
   // if (r.second) {
+  const auto r = key_map.insert(clause.key(), fact.get());
   if (r == nullptr) {
     facts.commit(std::move(fact));
     return next_id;
   } else {
     return
       // fact->value() == (*r.first)->value() ? (*r.first)->id() : Id::invalid();
-      fact->value() == r->value() ? r->id() : Id::invalid();
+      fact->value() == r->value() ? r->id : Id::invalid();
   }
 }
 
 thrift::Batch FactSet::serialize() const {
+  std::vector<unsigned char> buf;
   binary::Output output;
-  for (auto fact : *this) {
-    fact.serialize(output);
+  for (const auto& fact : facts) {
+    fact.get(FactIterator::Demand::KeyValue, buf).serialize(output);
   }
 
   thrift::Batch batch;
@@ -320,11 +342,12 @@ thrift::Batch FactSet::serialize() const {
 //
 thrift::Batch
 FactSet::serializeReorder(folly::Range<const uint64_t *> order) const {
+  std::vector<unsigned char> buf;
   binary::Output output;
   for (auto i : order) {
     assert(i >= startingId().toWord() &&
            i - startingId().toWord() < facts.size());
-    facts[i - startingId().toWord()].serialize(output);
+    facts[i - startingId().toWord()].get(FactIterator::Demand::KeyValue, buf).serialize(output);
   }
 
   thrift::Batch batch;
@@ -362,10 +385,11 @@ FactSet FactSet::rebase(
     return id < subst.finish() ? subst.subst(id) : id + offset;
   });
 
-  const auto split = lower_bound(subst.finish());
+  std::vector<unsigned char> buf;
+  const auto split = facts.lower_bound(subst.finish());
 
-  for (auto fact : folly::range(begin(), split)) {
-    auto r = substituteFact(inventory, substitute, fact);
+  for (const auto& fact : folly::range(facts.begin(), split)) {
+    auto r = substituteFact(inventory, substitute, fact.get(FactIterator::Demand::KeyValue, buf));
     global.insert({
       subst.subst(fact.id),
       fact.type,
@@ -375,8 +399,8 @@ FactSet FactSet::rebase(
 
   FactSet local(new_start);
   auto expected = new_start;
-  for (auto fact : folly::range(split, end())) {
-    auto r = substituteFact(inventory, substitute, fact);
+  for (const auto& fact : folly::range(split, facts.end())) {
+    auto r = substituteFact(inventory, substitute, fact.get(FactIterator::Demand::KeyValue, buf));
     const auto id =
       local.define(fact.type, Fact::Clause::from(r.first.bytes(), r.second));
     CHECK(id == expected);
@@ -387,19 +411,22 @@ FactSet FactSet::rebase(
 }
 
 void FactSet::append(FactSet other) {
-  assert(appendable(other));
+  // assert(appendable(other));
 
   facts.append(std::move(other.facts));
 
   keys.merge(std::move(other.keys), [](roart::Tree& left, const roart::Tree& right) {
     // left.insert(right.begin(), right.end());
     for (auto i = left.begin(); !i.done(); i.next()) {
-      left.insert(*i);
+      left.insert(i.getKey(), *i);
     }
   });
 }
 
 bool FactSet::appendable(const FactSet& other) const {
+  return false;
+
+#if 0
   if (empty() || other.empty()) {
     return true;
   }
@@ -420,6 +447,7 @@ bool FactSet::appendable(const FactSet& other) const {
   }
 
   return true;
+#endif
 }
 
 FactSet FactSet::cloneContiguous(Lookup& lookup) {

@@ -18,6 +18,46 @@ namespace rts {
 
 namespace roart {
 
+/*
+struct Value {
+  Id id;
+  Pid type;
+  uint32_t key_size;
+  uint32_t value_size;
+
+  folly::ByteRange value() const {
+    return {reinterpret_cast<const unsigned char *>(this+1), value_size};
+  }
+
+  struct deleter {
+    void operator()(Value *p) const noexcept {
+      std::free(p);
+    }
+  };
+
+  using unique_ptr = std::unique_ptr<Value, deleter>;
+
+  static unique_ptr alloc(const Fact *fact) {
+    const auto clause = fact->clause();
+    auto p = static_cast<Value *>(std::aligned_alloc(
+      alignof(Value),
+      sizeof(Value) + clause.key_size));
+    p->id = fact->id();
+    p->type = fact->type();
+    p->key_size = clause.key_size;
+    p->value_size = clause.value_size;
+    if (clause.value_size != 0) {
+      std::copy(
+        clause.value().begin(),
+        clause.value().end(),
+        reinterpret_cast<unsigned char *>(p+1));
+    }
+  }
+};
+*/
+
+using Value = Fact;
+
 class Tree final {
   struct Node;
   struct Node0;
@@ -27,6 +67,8 @@ class Tree final {
   struct Node256;
 
   Node * FOLLY_NULLABLE root = nullptr;
+  uint32_t max_key_size = 0;
+  uint32_t max_value_size = 0;
   size_t count = 0;
   size_t keymem = 0;
 
@@ -53,15 +95,20 @@ public:
 
   struct Iterator final : FactIterator {
     const Node * FOLLY_NULLABLE node = nullptr;
-    std::string buf;
+    std::vector<unsigned char> buf;
+    uint32_t key_size = 0;
     size_t prefixlen = 0;
 
     Iterator() = default;
-    Iterator(const Node *node, std::string buf, size_t prefixlen =0)
-      : node(node), buf(std::move(buf)), prefixlen(prefixlen) {}
+    Iterator(
+        const Node *node,
+        uint32_t buf_size,
+        folly::ByteRange start,
+        size_t prefixlen = 0);
 
     bool done() const { return node == nullptr; }
-    const std::string& getKey() const { return buf; }
+    // const std::string& getKey() const { return buf; }
+    folly::ByteRange getKey() const { return {buf.data(), key_size}; }
     void next() override;
 
     Fact::Ref get(Demand demand = KeyValue) override;
@@ -69,12 +116,30 @@ public:
     std::optional<Id> lower_bound() override { return {}; }
     std::optional<Id> upper_bound() override { return {}; }
 
+    void leftmost();
+
     static Iterator leftmost(
-      const Node * FOLLY_NULLABLE node, std::string prefix);
+      const Node * FOLLY_NULLABLE node,
+      uint32_t buf_size,
+      folly::ByteRange prefix);
     static Iterator right(
-      const Node * FOLLY_NULLABLE node, std::string prefix);
+      const Node * FOLLY_NULLABLE node,
+      uint32_t buf_size,
+      folly::ByteRange prefix);
 
     void down(unsigned char byte, const Node *node);
+
+    const Value *operator*() const;
+    Iterator& operator++() {
+      next();
+      return *this;
+    }
+
+    Iterator operator++(int) {
+      auto i = *this;
+      next();
+      return i;
+    }
 
     bool operator==(const Iterator& other) const {
       return node == other.node;
@@ -94,11 +159,15 @@ public:
   Tree(const Tree& other) = delete;
   Tree(Tree&& other) noexcept {
     root = other.root;
+    max_key_size = other.max_key_size;
+    max_value_size = other.max_value_size;
     count = other.count;
     keymem = other.keymem;
     other.root = nullptr;
     other.count = 0;
     other.keymem = 0;
+    other.max_key_size = 0;
+    other.max_value_size = 0;
   }
   Tree& operator=(const Tree& other) = delete;
   Tree& operator=(Tree&& other) noexcept {
@@ -126,11 +195,17 @@ public:
   }
 
   Iterator begin() const;
+  Iterator end() const {
+    return Iterator();
+  }
   Iterator find(folly::ByteRange key) const;
   Iterator lower_bound(folly::ByteRange key) const;
   Iterator lower_bound(folly::ByteRange key, size_t prefix_size) const;
 
-  bool insert(folly::ByteRange key, const Fact *fact);
+  const Value * FOLLY_NULLABLE insert(folly::ByteRange key, const Value *fact);
+  const Value * FOLLY_NULLABLE insert(const Fact *fact) {
+    return insert(fact->key(), fact);
+  }
 
   std::vector<std::string> keys() const;
 

@@ -46,8 +46,8 @@ std::pair<roart::Tree, std::vector<Fact::unique_ptr>> mkTree(
   for (const auto& key : keys) {
     auto fact = mkfact(key);
     CHECK_EQ(binary::mkString(fact->ref().key()), key);
-    const auto b = tree.insert(binary::byteRange(key), fact.get());
-    if (b) {
+    const auto old = tree.insert(/* binary::byteRange(key), */ fact.get());
+    if (old == nullptr) {
       facts.emplace_back(std::move(fact));
     }
   }
@@ -99,8 +99,10 @@ void buildAndCheck(Keys keys) {
   treeKeys.clear();
 
   for (auto i = tree.begin(); !i.done(); i.next()) {
-    EXPECT_EQ(i.getKey(), binary::mkString(i.get().key()));
-    treeKeys.push_back(i.getKey());
+    assert(i.get());
+    EXPECT_EQ(i.getKey(), i.get().key()) << " k=" << treeKeys.size();
+    assert(i.getKey() == i.get().key());
+    treeKeys.push_back(binary::mkString(i.getKey()));
   }
 
   EXPECT_EQ(keys, Keys{treeKeys});
@@ -109,7 +111,7 @@ void buildAndCheck(Keys keys) {
 
   for (const auto& fact : facts) {
     const auto b = tree.insert(fact->key(), fact.get());
-    EXPECT_FALSE(b);
+    EXPECT_NE(b, nullptr);
     auto it = tree.find(fact->key());
     EXPECT_FALSE(it.done());
     EXPECT_EQ(it.get().key(), fact->key());
@@ -121,7 +123,7 @@ void buildAndCheck(Keys keys) {
   treeKeys.clear();
 
   for (auto i = tree.begin(); !i.done(); i.next()) {
-    treeKeys.push_back(i.getKey());
+    treeKeys.push_back(binary::mkString(i.getKey()));
   }
 
   EXPECT_EQ(keys, Keys{treeKeys});
@@ -195,25 +197,25 @@ TEST(TrieTest, lowerBound) {
 
   EXPECT_EQ(Keys{tree.keys()}, Keys{keys});
 
-  EXPECT_EQ(tree.lower_bound(key("aaa")).getKey(), "abcd");
-  EXPECT_EQ(tree.lower_bound(key("abcd")).getKey(), "abcd");
-  EXPECT_EQ(tree.lower_bound(key("abcde")).getKey(), "abcdefg");
-  EXPECT_EQ(tree.lower_bound(key("abcdef")).getKey(), "abcdefg");
-  EXPECT_EQ(tree.lower_bound(key("abcdefg")).getKey(), "abcdefg");
-  EXPECT_EQ(tree.lower_bound(key("abcdefh")).getKey(), "bcde");
+  EXPECT_EQ(tree.lower_bound(key("aaa")).getKey(), key("abcd"));
+  EXPECT_EQ(tree.lower_bound(key("abcd")).getKey(), key("abcd"));
+  EXPECT_EQ(tree.lower_bound(key("abcde")).getKey(), key("abcdefg"));
+  EXPECT_EQ(tree.lower_bound(key("abcdef")).getKey(), key("abcdefg"));
+  EXPECT_EQ(tree.lower_bound(key("abcdefg")).getKey(), key("abcdefg"));
+  EXPECT_EQ(tree.lower_bound(key("abcdefh")).getKey(), key("bcde"));
 
-  EXPECT_EQ(tree.lower_bound(key("bcde")).getKey(), "bcde");
-  EXPECT_EQ(tree.lower_bound(key("bcdea")).getKey(), "bcdefg");
-  EXPECT_EQ(tree.lower_bound(key("bcdef")).getKey(), "bcdefg");
-  EXPECT_EQ(tree.lower_bound(key("bcdefh")).getKey(), "bcdehij");
-  EXPECT_EQ(tree.lower_bound(key("bcdeh")).getKey(), "bcdehij");
-  EXPECT_EQ(tree.lower_bound(key("bcdehij")).getKey(), "bcdehij");
-  EXPECT_EQ(tree.lower_bound(key("bcdehik")).getKey(), "bcdehil");
-  EXPECT_EQ(tree.lower_bound(key("bcdehil")).getKey(), "bcdehil");
-  EXPECT_EQ(tree.lower_bound(key("bcdehim")).getKey(), "bcdehim");
+  EXPECT_EQ(tree.lower_bound(key("bcde")).getKey(), key("bcde"));
+  EXPECT_EQ(tree.lower_bound(key("bcdea")).getKey(), key("bcdefg"));
+  EXPECT_EQ(tree.lower_bound(key("bcdef")).getKey(), key("bcdefg"));
+  EXPECT_EQ(tree.lower_bound(key("bcdefh")).getKey(), key("bcdehij"));
+  EXPECT_EQ(tree.lower_bound(key("bcdeh")).getKey(), key("bcdehij"));
+  EXPECT_EQ(tree.lower_bound(key("bcdehij")).getKey(), key("bcdehij"));
+  EXPECT_EQ(tree.lower_bound(key("bcdehik")).getKey(), key("bcdehil"));
+  EXPECT_EQ(tree.lower_bound(key("bcdehil")).getKey(), key("bcdehil"));
+  EXPECT_EQ(tree.lower_bound(key("bcdehim")).getKey(), key("bcdehim"));
 
-  EXPECT_EQ(tree.lower_bound(key("bcdehin")).getKey(),"cde");
-  EXPECT_EQ(tree.lower_bound(key("cdef")).getKey(),"cdfgh");
+  EXPECT_EQ(tree.lower_bound(key("bcdehin")).getKey(), key("cde"));
+  EXPECT_EQ(tree.lower_bound(key("cdef")).getKey(), key("cdfgh"));
   EXPECT_TRUE(tree.lower_bound(key("cdxz")).done());
 }
 
@@ -239,13 +241,13 @@ TEST(TrieTest, prefixIter) {
   auto it = tree.find(key("bcdefg"));
   EXPECT_FALSE(it.done());
   it.prefixlen = 4;
-  EXPECT_EQ(it.getKey(), "bcdefg");
+  EXPECT_EQ(it.getKey(), key("bcdefg"));
   it.next();
-  EXPECT_EQ(it.getKey(), "bcdehij");
+  EXPECT_EQ(it.getKey(), key("bcdehij"));
   it.next();
-  EXPECT_EQ(it.getKey(), "bcdehil");
+  EXPECT_EQ(it.getKey(), key("bcdehil"));
   it.next();
-  EXPECT_EQ(it.getKey(), "bcdehim");
+  EXPECT_EQ(it.getKey(), key("bcdehim"));
   it.next();
   EXPECT_TRUE(it.done());
 }

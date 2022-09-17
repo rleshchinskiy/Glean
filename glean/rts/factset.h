@@ -338,7 +338,8 @@ public:
 
 private:
   Facts facts;
-  DenseMap<Pid, FastSetBy<const Fact *, FactByKeyOnly>> keys;
+  // DenseMap<Pid, FastSetBy<const Fact *, FactByKeyOnly>> keys;
+  DenseMap<Pid, roart::Tree> keys;
 
   /// Cached predicate stats. We create these on-demand rather than maintain
   /// them throughout because most FactSets don't need them.

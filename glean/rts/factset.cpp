@@ -46,7 +46,8 @@ FactSet::~FactSet() noexcept = default;
 size_t FactSet::allocatedMemory() const noexcept {
   size_t n = facts.allocatedMemory() + keys.allocatedMemory();
   for (const auto& k : keys) {
-    n += k.second.getAllocatedMemorySize();
+    // n += k.second.getAllocatedMemorySize();
+    n += k.second.stats().bytes;
   }
   return n;
 }
@@ -282,12 +283,14 @@ Id FactSet::define(Pid type, Fact::Clause clause, Id) {
   auto fact = facts.alloc(next_id, type, clause);
   auto& key_map = keys[type];
   const auto r = key_map.insert(fact.get());
-  if (r.second) {
+  // if (r.second) {
+  if (r == nullptr) {
     facts.commit(std::move(fact));
     return next_id;
   } else {
     return
-      fact->value() == (*r.first)->value() ? (*r.first)->id() : Id::invalid();
+      // fact->value() == (*r.first)->value() ? (*r.first)->id() : Id::invalid();
+      fact->value() == r->value() ? r->id() : Id::invalid();
   }
 }
 
@@ -388,8 +391,11 @@ void FactSet::append(FactSet other) {
 
   facts.append(std::move(other.facts));
 
-  keys.merge(std::move(other.keys), [](auto& left, const auto& right) {
-    left.insert(right.begin(), right.end());
+  keys.merge(std::move(other.keys), [](roart::Tree& left, const roart::Tree& right) {
+    // left.insert(right.begin(), right.end());
+    for (auto i = left.begin(); !i.done(); i.next()) {
+      left.insert(*i);
+    }
   });
 }
 
@@ -405,7 +411,8 @@ bool FactSet::appendable(const FactSet& other) const {
   for (const auto& k : other.keys) {
     if (const auto *p = keys.lookup(k.first)) {
       for (auto i = k.second.begin(); i != k.second.end(); ++i) {
-        if (p->contains((*i)->key())) {
+        // if (p->contains((*i)->key())) {
+        if (p->find((*i)->key()) != p->end()) {
           return false;
         }
       }

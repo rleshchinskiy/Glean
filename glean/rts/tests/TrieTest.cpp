@@ -22,21 +22,66 @@ namespace {
 
 Id nextId = Id::fromWord(1);
 
-Fact::unique_ptr mkfact(const std::string& key) {
+struct kv {
+  kv(const char *s)
+    : data(s), key_size(data.size()), value_size(0) {}
+  kv(std::string k)
+    : data(std::move(k)), key_size(data.size()), value_size(0) {}
+  kv(std::string k, std::string v)
+    : data(k+v), key_size(k.size()), value_size(v.size()) {}
+
+  folly::ByteRange key() const {
+    return {reinterpret_cast<const unsigned char *>(data.data()), key_size};
+  }
+
+  folly::ByteRange value() const {
+    return {reinterpret_cast<const unsigned char *>(data.data()+key_size), value_size};
+  }
+  
+  std::string data;
+  uint32_t key_size;
+  uint32_t value_size;
+};
+
+bool operator==(const kv& x, const kv& y) {
+  return x.data == y.data && x.key_size == y.key_size && x.value_size == y.value_size;
+}
+
+bool operator!=(const kv& x, const kv& y) {
+  return !(x == y);
+}
+
+bool operator<(const kv& x, const kv& y) {
+  return x.key() < y.key() || (x.key() == y.key() && x.value() < y.value());
+}
+
+bool operator<=(const kv& x, const kv& y) {
+  return x.key() < y.key() || (x.key() == y.key() && x.value() <= y.value());
+}
+
+bool operator>(const kv& x, const kv& y) {
+  return y < x;
+}
+
+bool operator>=(const kv& x, const kv& y) {
+  return y <= x;
+}
+
+Fact::unique_ptr mkfact(const kv& fact) {
   return Fact::create(Fact::Ref{
     nextId++,
     Pid::fromWord(123),
     Fact::Clause{
-      reinterpret_cast<const unsigned char *>(key.data()),
-      static_cast<uint32_t>(key.size()),
-      0
+      reinterpret_cast<const unsigned char *>(fact.data.data()),
+      fact.key_size,
+      fact.value_size
     }
   });
 }
 
 struct Entry {
   Fact::unique_ptr fact;
-  roart::Tree::Value::unique_ptr value;
+  std::unique_ptr<roart::Tree::Value> value;
 };
 
 struct Storage {
@@ -44,19 +89,8 @@ struct Storage {
   std::vector<Entry> facts;
 };
 
-Storage mkTree(const std::vector<std::string>& keys) {
-  Storage storage;
-  for (const auto& key : keys) {
-    auto fact = mkfact(key);
-    CHECK_EQ(binary::mkString(fact->ref().key()), key);
-    auto value = roart::Tree::Value::alloc(fact->ref());
-    const auto old = storage.tree.insert(binary::byteRange(key), value.get());
-    if (old == nullptr) {
-      storage.facts.push_back(Entry{std::move(fact), std::move(value)});
-    }
-  }
-  return storage;
-}
+
+
 
 struct Keys {
   std::vector<std::string> keys;
@@ -82,19 +116,77 @@ std::ostream& operator<<(std::ostream& o, const Keys& keys) {
   return o;
 }
 
+struct KVs {
+  std::vector<kv> kvs;
+
+  KVs() {}
+  KVs(std::initializer_list<const char *> keys) {
+    for (auto key : keys) {
+      kvs.push_back(key);
+    }
+  }
+
+  KVs(const std::vector<std::string>& keys) {
+    for (const auto& key : keys) {
+      kvs.push_back(key);
+    }    
+  }
+
+  /*
+  template<typename... Args>
+  KVs(Args&&... args) {
+    (pushArg(std::forward<Args>(args)),...);
+  }
+
+  void pushArg(const char *key) {
+    kvs.push_back(key);
+  }
+
+  void pushArg(const std::string& key) {
+    kvs.push_back(key);
+  }
+  */
+
+  Keys keys() const {
+    Keys keys;
+    for (const auto& kv : kvs) {
+      keys.keys.push_back(binary::mkString(kv.key()));
+    }
+    return keys;
+  }
+
+  void prep() {
+    std::sort(kvs.begin(), kvs.end());
+    kvs.erase(std::unique(kvs.begin(), kvs.end()), kvs.end());
+  }
+};
+
+Storage mkTree(const KVs& facts) {
+  Storage storage;
+  for (const auto& kv : facts.kvs) {
+    auto fact = mkfact(kv);
+    auto value = std::make_unique<roart::Tree::Value>(fact->ref());
+    const auto old = storage.tree.insert(fact->clause(), value.get());
+    if (old == nullptr) {
+      storage.facts.push_back(Entry{std::move(fact), std::move(value)});
+    }
+  }
+  return storage;
+}
+
 folly::ByteRange key(const char *s) {
   const auto p = reinterpret_cast<const unsigned char *>(s);
   return {p, p + std::strlen(s)};
 }
 
-void buildAndCheck(Keys keys) {
-  auto [tree, facts] = mkTree(keys.keys);
+void buildAndCheck(KVs kvs) {
+  auto [tree, facts] = mkTree(kvs);
 
   LOG(INFO) << tree.stats();
   tree.validate();
 
-  std::sort(keys.begin(), keys.end());
-  keys.keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
+  kvs.prep();
+  const Keys keys{kvs.keys()};
 
   auto treeKeys = tree.keys();
  
@@ -111,26 +203,32 @@ void buildAndCheck(Keys keys) {
 
   EXPECT_EQ(keys, Keys{treeKeys});
 
-  EXPECT_EQ(tree.size(), keys.keys.size());
+  EXPECT_EQ(tree.size(), kvs.kvs.size());
 
   for (const auto& entry : facts) {
-    const auto b = tree.insert(entry.fact->key(), entry.value.get());
+    const auto b = tree.insert(entry.fact->clause(), entry.value.get());
     EXPECT_NE(b, nullptr);
     auto it = tree.find(entry.fact->key());
     EXPECT_FALSE(it.done());
     EXPECT_EQ(it.get().key(), entry.fact->key());
+    EXPECT_EQ(it.get().value(), entry.fact->value());
     it = tree.lower_bound(entry.fact->key());
     EXPECT_FALSE(it.done());
     EXPECT_EQ(it.get().key(), entry.fact->key());
+    EXPECT_EQ(it.get().value(), entry.fact->value());
   }
 
-  treeKeys.clear();
+  // treeKeys.clear();
 
+  auto n = 0;
   for (auto i = tree.begin(); !i.done(); i.next()) {
-    treeKeys.push_back(binary::mkString(i.getKey()));
+    EXPECT_LE(n, kvs.kvs.size());
+    EXPECT_EQ(i.getKey(), kvs.kvs[n].key()) << " at " << n;
+    ++n;
+    // treeKeys.push_back(binary::mkString(i.getKey()));
   }
 
-  EXPECT_EQ(keys, Keys{treeKeys});
+  // EXPECT_EQ(keys, Keys{treeKeys});
 }
 
 std::vector<std::string> permutes() {
@@ -180,17 +278,17 @@ void lowerBoundTest() {
 
 TEST(TrieTest, keys) {
   LOG(INFO) << "*** 1";
-  buildAndCheck(Keys{});
+  buildAndCheck({});
   LOG(INFO) << "*** 2";
-  buildAndCheck(Keys{{"a"}});
+  buildAndCheck({"a"});
   LOG(INFO) << "*** 3";
-  buildAndCheck(Keys{{"a","b"}});
+  buildAndCheck({"a","b"});
   LOG(INFO) << "*** 4";
-  buildAndCheck(Keys{{"a","abc","adbx","adcde","cde"}});
+  buildAndCheck({"a","abc","adbx","adcde","cde"});
   LOG(INFO) << "*** 5";
-  buildAndCheck(Keys{permutes()});
+  buildAndCheck(permutes());
   LOG(INFO) << "*** 5";
-  buildAndCheck(Keys{x3()});
+  buildAndCheck(x3());
 }
 
 TEST(TrieTest, lowerBound) {
@@ -227,7 +325,7 @@ TEST(TrieTest, lowerBound2) {
   std::string z;
   z += '\0';
   z += "bcdefgh";
-  auto [tree, fact] = mkTree({z ,"bcdefgh"});
+  auto [tree, fact] = mkTree(KVs({z ,"bcdefgh"}));
 
   EXPECT_FALSE(tree.lower_bound(binary::byteRange(z)).done());
   EXPECT_FALSE(tree.lower_bound(key("bcdefgh")).done());

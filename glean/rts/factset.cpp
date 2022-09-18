@@ -40,18 +40,25 @@ struct FactSet::Index {
 };
 #endif
 
-FactSet::FactSet(Id start) : facts(start) {}
+FactSet::FactSet(Id start)
+  : facts(start)
+  {}
 FactSet::FactSet(FactSet&&) = default;
 FactSet& FactSet::operator=(FactSet&&) = default;
 FactSet::~FactSet() noexcept = default;
 
 size_t FactSet::allocatedMemory() const noexcept {
+  size_t bytes = 0;
+  size_t arenas = 0;
   size_t n = facts.allocatedMemory() + keys.allocatedMemory();
   for (const auto& k : keys) {
     // n += k.second.getAllocatedMemorySize();
     const auto stats = k.second.stats();
-    n += stats.bytes + stats.prefix_length;
+    n += stats.bytes + stats.arena_size; // stats.prefix_length;
+    bytes += stats.bytes;
+    arenas += stats.arena_size;
   }
+  LOG(INFO) << "bytes=" << bytes << " sarenas=" << arenas;
   return n;
 }
 

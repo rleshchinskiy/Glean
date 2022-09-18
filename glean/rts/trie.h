@@ -74,7 +74,10 @@ public:
   };
 
 private:
+  struct Allocator;
+
   Node * FOLLY_NULLABLE root = nullptr;
+  Allocator * allocator;
   uint32_t max_key_size = 0;
   uint32_t max_value_size = 0;
   size_t count = 0;
@@ -97,6 +100,7 @@ public:
 
     size_t bytes = 0;
     size_t key_size = 0;
+    size_t arena_size = 0;
 
     size_t nodes() const { return node0 + node4 + node16 + node48 + node256; }
   };
@@ -165,12 +169,13 @@ public:
   using iterator = Iterator;
   using const_iterator = Iterator;
 
-  Tree() noexcept = default;
+  Tree();
   Tree(const Tree& other) = delete;
   Tree(Tree&& other) noexcept {
     root = other.root;
     max_key_size = other.max_key_size;
     max_value_size = other.max_value_size;
+    allocator = other.allocator;
     count = other.count;
     keymem = other.keymem;
     other.root = nullptr;
@@ -178,6 +183,7 @@ public:
     other.keymem = 0;
     other.max_key_size = 0;
     other.max_value_size = 0;
+    other.allocator = nullptr;
   }
   Tree& operator=(const Tree& other) = delete;
   Tree& operator=(Tree&& other) noexcept {
@@ -186,11 +192,13 @@ public:
       root = other.root;
       max_key_size = other.max_key_size;
       max_value_size = other.max_value_size;
+      allocator = other.allocator;
       count = other.count;
       keymem = other.keymem;
       other.root = nullptr;
       other.count = 0;
       other.keymem = 0;
+      other.allocator = nullptr;
     }
     return *this;
   }

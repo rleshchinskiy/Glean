@@ -8,18 +8,132 @@
 
 #include "glean/rts/trie.h"
 
+#include <folly/memory/Arena.h>
+
 namespace facebook {
 namespace glean {
 namespace rts {
 
 namespace roart {
 
-Tree::~Tree() noexcept {
-  /*
-  if (count != 0) {
-    LOG(INFO) << "Tree::~Tree " << stats();
+#if 0
+struct Tree::Allocator {
+  folly::SysArena arena;
+
+  Allocator()
+    : arena(
+        folly::SysArena::kDefaultMinBlockSize,
+        folly::SysArena::kNoSizeLimit,
+        1)
+    {
+    }
+
+  unsigned char *allocate(size_t size) {
+    return reinterpret_cast<unsigned char *>(arena.allocate(size));
   }
-  */
+
+  size_t totalSize() const {
+    return arena.totalSize();
+  }
+};
+#endif
+
+struct Tree::Allocator {
+  struct Page {
+    Page *next;
+
+    unsigned char *data() noexcept {
+      return reinterpret_cast<unsigned char *>(this + 1);
+    }
+
+    static Page *alloc(size_t size) {
+      return static_cast<Page *>(std::aligned_alloc(alignof(Page), size));
+    }
+  };
+
+  Page *current = nullptr;
+  size_t page_size = 4096;
+  size_t used = page_size;
+  size_t total_size = 0;
+
+  Allocator() noexcept = default;
+  ~Allocator() noexcept;
+
+  Allocator(const Allocator&) = delete;
+  Allocator(Allocator&&) = delete;
+  Allocator& operator=(const Allocator&) = delete;
+  Allocator& operator=(Allocator&&) = delete;
+
+  size_t pageCapacity() const noexcept {
+    return page_size - sizeof(Page);
+  }
+
+  unsigned char *allocate(size_t size) {
+    if (page_size - used >= size) {
+      const auto p = reinterpret_cast<unsigned char *>(current) + used;
+      used += size;
+      return p;
+    } else {
+      return newPage(size);
+    }
+  }
+
+  unsigned char *newPage(size_t size);
+
+  size_t totalSize() const {
+    return total_size;
+  }
+};
+
+Tree::Allocator::~Allocator() noexcept {
+  auto page = current;
+  while (page != nullptr) {
+    auto next = page->next;
+    std::free(page);
+    page = next;
+  }
+}
+
+unsigned char *Tree::Allocator::newPage(size_t size) {
+  static constexpr size_t k = 16;
+  if (size*k > pageCapacity()) {
+    page_size = folly::nextPowTwo(sizeof(Page) + size*k);
+  }
+  const auto page =
+    static_cast<Page*>(std::aligned_alloc(alignof(Page), page_size));
+  page->next = current;
+  current = page;
+  used = sizeof(Page) + size;
+  total_size += page_size;
+  return page->data();
+/*
+  Page *page;
+  if (size > pageCapacity()) {
+    page = Page::alloc(sizeof(Page) + size);
+    page->next = first_page;
+    first_page = page;
+    if (last_page == nullptr) {
+      last_page = page;
+    }
+    total_size += sizeof(Page) + size;
+  } else {
+    page = Page::alloc(page_size);
+    page->next = nullptr;
+    last_page = page;
+    if (first_page == nullptr) {
+      first_page = page;
+    }
+    used = sizeof(Page) + size;
+    total_size += page_size;
+  }
+  return page->data();
+*/
+}
+
+
+Tree::Tree() : allocator(new Allocator) {}
+
+Tree::~Tree() noexcept {
   clear();
 }
 
@@ -31,7 +145,8 @@ struct Tree::Node {
   Node *parent;
 
   const Value * FOLLY_NULLABLE value;
-  std::string prefix;
+  const unsigned char *prefix;
+  uint32_t prefix_size;
 
   explicit Node(Type ty) : type(ty) {}
 
@@ -62,6 +177,7 @@ struct Tree::Node {
   };
 
   Insert insert(
+    Allocator& alocator,
     Node * FOLLY_NULLABLE &me,
     folly::ByteRange key,
     const Value *fact);
@@ -90,8 +206,10 @@ struct Tree::Node0 {
   Node::Child at(int index) const;
   Node::Child find(unsigned char byte) const;
   Node::Child lower_bound(unsigned char byte) const;
+  unsigned char byteAt(int index) const;
 
   Node * FOLLY_NULLABLE * FOLLY_NULLABLE insert(
+    Allocator& allocator,
     Node * FOLLY_NULLABLE &me,
     unsigned char byte,
     folly::ByteRange key,
@@ -120,8 +238,10 @@ struct Tree::Node4 {
   Node::Child at(int index) const;
   Node::Child find(unsigned char byte) const;
   Node::Child lower_bound(unsigned char byte) const;
+  unsigned char byteAt(int index) const;
 
   Node * FOLLY_NULLABLE * FOLLY_NULLABLE insert(
+    Allocator& allocator,
     Node * FOLLY_NULLABLE &me,
     unsigned char byte,
     folly::ByteRange key,
@@ -150,8 +270,10 @@ struct Tree::Node16 {
   Node::Child at(int index) const;
   Node::Child find(unsigned char byte) const;
   Node::Child lower_bound(unsigned char byte) const;
+  unsigned char byteAt(int index) const;
 
   Node * FOLLY_NULLABLE * FOLLY_NULLABLE insert(
+    Allocator& alocator,
     Node * FOLLY_NULLABLE &me,
     unsigned char byte,
     folly::ByteRange key,
@@ -175,6 +297,7 @@ struct Tree::Node48 {
   Node::Child at(int index) const;
   Node::Child find(unsigned char byte) const;
   Node::Child lower_bound(unsigned char byte) const;
+  unsigned char byteAt(int index) const;
 
   Node48() : node(Node::N48) {
     std::fill(indices,indices+256,0xff);
@@ -184,6 +307,7 @@ struct Tree::Node48 {
   void destroy();
 
   Node * FOLLY_NULLABLE * FOLLY_NULLABLE insert(
+    Allocator& allocator,
     Node * FOLLY_NULLABLE &me,
     unsigned char byte,
     folly::ByteRange key,
@@ -211,8 +335,10 @@ struct Tree::Node256 {
   Node::Child at(int index) const;
   Node::Child find(unsigned char byte) const;
   Node::Child lower_bound(unsigned char byte) const;
+  unsigned char byteAt(int index) const;
 
   Node * FOLLY_NULLABLE * FOLLY_NULLABLE insert(
+    Allocator& allocator,
     Node * FOLLY_NULLABLE &me,
     unsigned char byte,
     folly::ByteRange key,
@@ -312,14 +438,15 @@ Fact::Ref Tree::Value::get(
   const auto vsize = demand == FactIterator::Demand::KeyOnly ? 0 : value_size;
   buf.resize(key_size + vsize);
   auto pos = buf.begin() + key_size;
+  // auto pos = buf.data() + key_size;
   if (vsize > 0) {
     std::copy(value().begin(), value().end(), pos);
   }
   auto current = node;
   while (current != nullptr) {
-    assert(current->prefix.size() <= pos - buf.begin());
-    pos -= current->prefix.size();
-    std::copy (current->prefix.begin(), current->prefix.end(), pos);
+    assert(current->prefix_size <= pos - buf.begin());
+    pos -= current->prefix_size;
+    std::copy (current->prefix, current->prefix + current->prefix_size, pos);
     const auto index = current->index;
     current = current->parent;
     if (current != nullptr) {
@@ -330,6 +457,22 @@ Fact::Ref Tree::Value::get(
       --pos;
       *pos = child.byte;
     }
+    /*
+    if (current->prefix_size != 0) {
+      assert(current->prefix_size <= pos - buf.data());
+      pos -= current->prefix_size;
+      std::memcpy(pos, current->prefix, current->prefix_size);
+      // std::copy(current->prefix, current->prefix + current->prefix_size, pos);
+    }
+    const auto index = current->index;
+    current = current->parent;
+    if (current != nullptr) {
+      assert(pos > buf.data());
+      --pos;
+      *pos =
+        current->dispatch([&](const auto *p) { return p->byteAt(index); });
+    }
+    */
   }
   return Fact::Ref{id, type, Fact::Clause{buf.data(), key_size, vsize}};
 }
@@ -359,19 +502,23 @@ mismatch(folly::ByteRange s, folly::ByteRange t) {
 }
 
 Tree::Node::Insert Tree::Node::insert(
+    Allocator& allocator,
     Node * FOLLY_NULLABLE &me,
     folly::ByteRange key,
     const Value *fact) {
-  const auto [p,k] = mismatch(prefix, key);
+  const auto [p,k] = mismatch(folly::ByteRange{prefix, prefix+prefix_size}, key);
   Insert result;
-  if (p < prefix.end()) {
+  if (p < prefix + prefix_size) {
     auto pre = alloc<Node4>();
-    pre->node.prefix = {prefix.begin(), p};
+    pre->node.prefix = prefix;
+    pre->node.prefix_size = p - prefix;
     pre->node.parent = parent;
     pre->node.index = index;
     parent = &pre->node;
     const auto byte = static_cast<unsigned char>(*p);
-    prefix = {p+1, prefix.end()};
+    // prefix_size -= p - prefix + 1;
+    prefix_size = (prefix + prefix_size) - (p+1);
+    prefix = p+1;
     if (k == key.end()) {
       index = 0;
       pre->node.value = fact;
@@ -381,7 +528,10 @@ Tree::Node::Insert Tree::Node::insert(
     } else {
       pre->node.value = nullptr;
       auto rest = alloc<Node0>();
-      rest->node.prefix = {k+1, key.end()};
+      auto buf = static_cast<unsigned char *>(allocator.allocate(key.end() - (k + 1)));
+      std::copy(k + 1, key.end(), buf);
+      rest->node.prefix = buf;
+      rest->node.prefix_size = key.end() - (k + 1);
       rest->node.value = fact;
       fact->node = &rest->node;
       rest->node.parent = &pre->node;
@@ -403,7 +553,7 @@ Tree::Node::Insert Tree::Node::insert(
     result.fact = nullptr;
   } else if (k < key.end()) {
     result.node = dispatch([&,k=k](auto node) {
-      return node->insert(me, *k, {k+1,key.end()}, fact);
+      return node->insert(allocator, me, *k, {k+1,key.end()}, fact);
     });
     if (result.node != nullptr) {
       result.keypos = k+1;
@@ -424,6 +574,7 @@ Tree::Node::Insert Tree::Node::insert(
 }
 
 Tree::Node * FOLLY_NULLABLE * FOLLY_NULLABLE Tree::Node0::insert(
+    Allocator& allocator,
     Tree::Node * FOLLY_NULLABLE &me,
     unsigned char byte,
     folly::ByteRange key,
@@ -431,7 +582,10 @@ Tree::Node * FOLLY_NULLABLE * FOLLY_NULLABLE Tree::Node0::insert(
   auto p = Node::alloc<Node4>(node);
   node.parent = &p->node;
   node.index = 0;
-  node.prefix = binary::mkString(key);
+  auto buf = static_cast<unsigned char *>(allocator.allocate(key.size()));
+  std::copy(key.begin(), key.end(), buf);
+  node.prefix = buf;
+  node.prefix_size = key.size();
   node.value = fact;
   fact->node = &node;
   p->bytes[0] = byte;
@@ -441,6 +595,7 @@ Tree::Node * FOLLY_NULLABLE * FOLLY_NULLABLE Tree::Node0::insert(
 }
 
 Tree::Node * FOLLY_NULLABLE * FOLLY_NULLABLE Tree::Node4::insert(
+    Allocator& allocator,
     Tree::Node * FOLLY_NULLABLE &me,
     unsigned char byte,
     folly::ByteRange key,
@@ -451,7 +606,10 @@ Tree::Node * FOLLY_NULLABLE * FOLLY_NULLABLE Tree::Node4::insert(
     return &children[i];
   } else {
     auto p = Node::alloc<Node0>();
-    p->node.prefix = binary::mkString(key);
+    auto buf = static_cast<unsigned char *>(allocator.allocate(key.size()));
+    std::copy(key.begin(), key.end(), buf);
+    p->node.prefix = buf;
+    p->node.prefix_size = key.size();
     p->node.value = fact;
     fact->node = &p->node;
     for (i = 0; i < 4 && children[i]; ++i) {}
@@ -497,6 +655,7 @@ Tree::Node * FOLLY_NULLABLE * FOLLY_NULLABLE Tree::Node4::insert(
 }
 
 Tree::Node * FOLLY_NULLABLE * FOLLY_NULLABLE Tree::Node16::insert(
+    Allocator& allocator,
     Tree::Node * FOLLY_NULLABLE &me,
     unsigned char byte,
     folly::ByteRange key,
@@ -507,7 +666,10 @@ Tree::Node * FOLLY_NULLABLE * FOLLY_NULLABLE Tree::Node16::insert(
     return &children[i];
   } else {
     auto p = Node::alloc<Node0>();
-    p->node.prefix = binary::mkString(key);
+    auto buf = static_cast<unsigned char *>(allocator.allocate(key.size()));
+    std::copy(key.begin(), key.end(), buf);
+    p->node.prefix = buf;
+    p->node.prefix_size = key.size();
     p->node.value = fact;
     fact->node = &p->node;
     for (i = 4; i < 16 && children[i]; ++i) {}
@@ -551,6 +713,7 @@ Tree::Node * FOLLY_NULLABLE * FOLLY_NULLABLE Tree::Node16::insert(
 }
 
 Tree::Node * FOLLY_NULLABLE * FOLLY_NULLABLE Tree::Node48::insert(
+    Allocator& allocator,
     Tree::Node * FOLLY_NULLABLE &me,
     unsigned char byte,
     folly::ByteRange key,
@@ -559,7 +722,10 @@ Tree::Node * FOLLY_NULLABLE * FOLLY_NULLABLE Tree::Node48::insert(
     return &children[indices[byte]];
   } else {
     auto p = Node::alloc<Node0>();
-    p->node.prefix = binary::mkString(key);
+    auto buf = static_cast<unsigned char *>(allocator.allocate(key.size()));
+    std::copy(key.begin(), key.end(), buf);
+    p->node.prefix = buf;
+    p->node.prefix_size = key.size();
     p->node.value = fact;
     fact->node = &p->node;
     size_t i;
@@ -597,6 +763,7 @@ Tree::Node * FOLLY_NULLABLE * FOLLY_NULLABLE Tree::Node48::insert(
 }
 
 Tree::Node * FOLLY_NULLABLE * FOLLY_NULLABLE Tree::Node256::insert(
+    Allocator& allocator,
     Tree::Node * FOLLY_NULLABLE &me,
     unsigned char byte,
     folly::ByteRange key,
@@ -605,7 +772,10 @@ Tree::Node * FOLLY_NULLABLE * FOLLY_NULLABLE Tree::Node256::insert(
     return &children[byte];
   } else {
     auto p = Node::alloc<Node0>();
-    p->node.prefix = binary::mkString(key);
+    auto buf = static_cast<unsigned char *>(allocator.allocate(key.size()));
+    std::copy(key.begin(), key.end(), buf);
+    p->node.prefix = buf;
+    p->node.prefix_size = key.size();
     p->node.value = fact;
     fact->node = &p->node;
     p->node.index = byte;
@@ -619,7 +789,10 @@ const Tree::Value * FOLLY_NULLABLE Tree::insert(folly::ByteRange key, const Valu
   assert (key.size() == val->key_size);
   if (!root) {
     root = reinterpret_cast<Node*>(Node::alloc<Node0>());
-    root->prefix = binary::mkString(key);
+    auto buf = static_cast<unsigned char *>(allocator->allocate(key.size()));
+    std::copy(key.begin(), key.end(), buf);
+    root->prefix = buf;
+    root->prefix_size = key.size();
     root->value = val;
     val->node = root;
     root->parent = nullptr;
@@ -634,7 +807,7 @@ const Tree::Value * FOLLY_NULLABLE Tree::insert(folly::ByteRange key, const Valu
     ins.node = &root;
     ins.keypos = key.begin();
     while (ins.node != nullptr) {
-      ins = (*ins.node)->insert(*ins.node, {ins.keypos, key.end()}, val);
+      ins = (*ins.node)->insert(*allocator, *ins.node, {ins.keypos, key.end()}, val);
     }
     if (ins.fact == nullptr) {
       max_key_size = std::max(max_key_size, val->key_size);
@@ -650,6 +823,8 @@ void Tree::clear() noexcept {
   if (root != nullptr) {
     root->destroy();
     root = nullptr;
+    delete allocator;
+    allocator = nullptr;
     max_key_size = 0;
     max_value_size = 0;
     count = 0;
@@ -705,14 +880,14 @@ const Tree::Value *Tree::Iterator::operator*() const {
 
 void Tree::Iterator::leftmost() {
   if (node != nullptr) {
-    CHECK_LE(key_size + node->prefix.size(), buf.size())
+    CHECK_LE(key_size + node->prefix_size, buf.size())
       << "key_size: " << key_size;
-    assert(key_size + node->prefix.size() <= buf.size());
+    assert(key_size + node->prefix_size <= buf.size());
     std::copy(
-      node->prefix.begin(),
-      node->prefix.end(),
+      node->prefix,
+      node->prefix + node->prefix_size,
       buf.begin() + key_size);
-    key_size += node->prefix.size();
+    key_size += node->prefix_size;
     if (!node->value) {
       next();
     }
@@ -766,8 +941,8 @@ Tree::Iterator Tree::Iterator::right(
       } else {
         // assert(prefix.size() >= node->prefix.size());
         // prefix.resize(prefix.size() - node->prefix.size());
-        assert(iter.key_size >= iter.node->prefix.size());
-        iter.key_size -= iter.node->prefix.size();
+        assert(iter.key_size >= iter.node->prefix_size);
+        iter.key_size -= iter.node->prefix_size;
       }
     }
   }
@@ -779,7 +954,7 @@ void Tree::Iterator::next() {
   while (node != nullptr) {
     const auto child = node->dispatch([&](auto p) { return p->at(index); });
     if (child.node) {
-      assert (key_size + child.node->prefix.size() + 1 <= buf.size());
+      assert (key_size + child.node->prefix_size + 1 <= buf.size());
       // buf.push_back(child.byte);
       buf[key_size] = child.byte;
       ++key_size;
@@ -787,18 +962,18 @@ void Tree::Iterator::next() {
       index = 0;
       // buf.append(node->prefix.begin(), node->prefix.end());
       std::copy(
-        node->prefix.begin(),
-        node->prefix.end(),
+        node->prefix,
+        node->prefix + node->prefix_size,
         buf.begin() + key_size);
-      key_size += node->prefix.size();
+      key_size += node->prefix_size;
       if (node->value) {
         return;
       }
     } else if (node->parent != nullptr
-                && key_size >= prefixlen + node->prefix.size() + 1) {
+                && key_size >= prefixlen + node->prefix_size + 1) {
       // buf.resize(buf.size() - node->prefix.size() - 1);
-      assert(key_size >= node->prefix.size() + 1);
-      key_size -= node->prefix.size() + 1;
+      assert(key_size >= node->prefix_size + 1);
+      key_size -= node->prefix_size + 1;
       index = node->index + 1;
       node = node->parent;
       // loop
@@ -848,6 +1023,31 @@ Tree::Node::Child Tree::Node256::at(int index) const {
   }
 }
 
+unsigned char Tree::Node0::byteAt(int) const {
+  assert(false);
+  return 0;
+}
+
+unsigned char Tree::Node4::byteAt(int index) const {
+  assert(index < 4 && children[index]);
+  return bytes[index];
+}
+
+unsigned char Tree::Node16::byteAt(int index) const {
+  assert(index < 16 && children[index]);
+  return bytes[index];
+}
+
+unsigned char Tree::Node48::byteAt(int index) const {
+  assert(index < 48 && children[index]);
+  return bytes[index];
+}
+
+unsigned char Tree::Node256::byteAt(int index) const {
+  assert(index < 256 && children[index]);
+  return static_cast<unsigned char>(index);
+}
+
 Tree::Iterator Tree::begin() const {
   return Iterator::leftmost(root, max_key_size + max_value_size, {});
 }
@@ -893,8 +1093,8 @@ Tree::Iterator Tree::find(folly::ByteRange key) const {
   auto keypos = key.begin();
   const Node *node = root;
   while (true) {
-    const auto [p,k] = mismatch(node->prefix, {keypos, key.end()});
-    if (p != node->prefix.end()) {
+    const auto [p,k] = mismatch(folly::ByteRange{node->prefix, node->prefix_size}, {keypos, key.end()});
+    if (p != node->prefix + node->prefix_size) {
       return {};
     } else if (k == key.end()) {
       if (node->value) {
@@ -963,10 +1163,10 @@ Tree::Iterator Tree::lower_bound(folly::ByteRange key) const {
   const Node * FOLLY_NULLABLE node = root;
   folly::ByteRange::const_iterator keypos = key.begin();
   while (true) {
-    const auto [p,k] = mismatch(node->prefix, {keypos, key.end()});
-    if (k == key.end() || (p != node->prefix.end() && *k < static_cast<unsigned char>(*p))) {
+    const auto [p,k] = mismatch(folly::ByteRange{node->prefix, node->prefix_size}, {keypos, key.end()});
+    if (k == key.end() || (p != node->prefix + node->prefix_size && *k < static_cast<unsigned char>(*p))) {
         return Iterator::leftmost(node, max_key_size + max_value_size, {key.begin(), keypos});
-    } else if (p == node->prefix.end()) {
+    } else if (p == node->prefix + node->prefix_size) {
       const Node::Child child = node->dispatch([k=k](auto p) {
         return p->lower_bound(*k);
       });
@@ -1150,12 +1350,12 @@ void Tree::validate() const {
 }
 
 void Tree::Node::keys(std::string& buf, std::vector<std::string>& v) const {
-  buf.append(prefix.begin(), prefix.end());
+  buf.append(reinterpret_cast<const char *>(prefix), prefix_size);
   if (value) {
     v.push_back(buf);
   }
   dispatch([&](auto p) { p->keys(buf,v); });
-  buf.resize(buf.size() - prefix.size());
+  buf.resize(buf.size() - prefix_size);
 }
 
 void Tree::Node0::keys(std::string& buf, std::vector<std::string>& v) const {}
@@ -1224,7 +1424,7 @@ void Tree::Node::dump(std::ostream& s, int indent) const {
     str = "*";
   }
   str += '[';
-  str += binary::hex(prefix);
+  str += binary::hex(folly::ByteRange{prefix, prefix_size});
   str += ']';
   dispatch([&](auto p) { p->dump(s, indent, str); });
 }
@@ -1279,7 +1479,7 @@ void Tree::dump(std::ostream& s) const {
 }
 
 void Tree::Node::stats(Stats& s) const {
-  s.prefix_length += prefix.size();
+  s.prefix_length += prefix_size;
   dispatch([&](auto p) { p->stats(s); });
 }
 
@@ -1329,6 +1529,7 @@ void Tree::Node256::stats(Stats& s) const {
 Tree::Stats Tree::stats() const {
   Stats s;
   s.key_size = keymem;
+  s.arena_size = allocator->totalSize();
   if (root) {
     root->stats(s);
   }

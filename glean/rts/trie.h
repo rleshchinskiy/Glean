@@ -32,7 +32,7 @@ public:
     Pid type;
     uint32_t key_size;
     uint32_t value_size;
-    mutable Node *node;
+    mutable Node0 *node0;
 
     Value() = default;
     explicit Value(Fact::Ref fact) {
@@ -81,24 +81,65 @@ public:
     size_t nodes() const { return node0 + node4 + node16 + node48 + node256; }
   };
 
+  struct Buffer {
+    std::unique_ptr<unsigned char[]> buf;
+    uint32_t capacity;
+    uint32_t size;
+
+    Buffer() : capacity(0), size(0) {}
+
+    explicit Buffer(uint32_t cap)
+      : buf(new unsigned char[cap])
+      , capacity(cap)
+      , size(0)
+      {}
+
+    Buffer(uint32_t cap, folly::ByteRange prefix) : Buffer(cap) {
+      assert(prefix.size() <= cap);
+      if (prefix.data() != nullptr) {
+        std::memcpy(buf.get(), prefix.data(), prefix.size());
+        size = static_cast<uint32_t>(prefix.size());
+      }
+    }
+
+    void enter(const Node *node);
+    void enter(unsigned char byte, const Node *node);
+    void leave(const Node *node);
+    void copyValue(const Node0 *node);
+
+    const unsigned char *data() const {
+      return buf.get();
+    }
+
+    folly::ByteRange get() const {
+      return {buf.get(), size};
+    }
+
+    bool fits(size_t n) const {
+      return n <= capacity - size;
+    }
+  };
+
+  Buffer buffer() const {
+    return Buffer(max_key_size + max_value_size);
+  }
+
+  Buffer buffer(folly::ByteRange prefix) const {
+    return Buffer(max_key_size + max_value_size, prefix);
+  }
+
   struct Iterator final : FactIterator {
-    const Node * FOLLY_NULLABLE node = nullptr;
-    std::vector<unsigned char> buf;
-    uint32_t key_size = 0;
+    const Node0 * FOLLY_NULLABLE node = nullptr;
+    Buffer buffer;
     size_t prefixlen = 0;
 
     Iterator() = default;
-    Iterator(
-        const Node *node,
-        uint32_t buf_size,
-        folly::ByteRange start,
-        size_t prefixlen = 0);
+    Iterator(const Node0 *node, Buffer buffer, size_t prefixlen = 0);
 
     Id id() const;
 
     bool done() const { return node == nullptr; }
-    // const std::string& getKey() const { return buf; }
-    folly::ByteRange getKey() const { return {buf.data(), key_size}; }
+    folly::ByteRange getKey() const { return buffer.get(); }
     void next() override;
 
     Fact::Ref get(Demand demand = KeyValue) override;
@@ -106,29 +147,10 @@ public:
     std::optional<Id> lower_bound() override { return {}; }
     std::optional<Id> upper_bound() override { return {}; }
 
-    void leftmost();
-
-    static Iterator leftmost(
-      const Node * FOLLY_NULLABLE node,
-      uint32_t buf_size,
-      folly::ByteRange prefix);
-    static Iterator right(
-      const Node * FOLLY_NULLABLE node,
-      uint32_t buf_size,
-      folly::ByteRange prefix);
-
-    void down(unsigned char byte, const Node *node);
-
     const Value *operator*() const;
     Iterator& operator++() {
       next();
       return *this;
-    }
-
-    Iterator operator++(int) {
-      auto i = *this;
-      next();
-      return i;
     }
 
     bool operator==(const Iterator& other) const {
@@ -141,6 +163,28 @@ public:
   };
 
   friend struct Iterator;
+
+
+  struct Cursor final {
+    const Node * FOLLY_NULLABLE node = nullptr;
+    Buffer buffer;
+    size_t prefixlen = 0;
+
+    Cursor() = default;
+    Cursor(
+      const Node * FOLLY_NULLABLE node,
+      Buffer buffer,
+      size_t prefixlen = 0);
+
+    Cursor& down(unsigned char byte, const Node *child) &;
+    Cursor&& down(unsigned char byte, const Node *child) &&;
+    Iterator leftmost() &&;
+    Iterator next() &&;
+
+    unsigned char up();
+  };
+
+  Cursor cursorAt(folly::ByteRange prefix, const Node *node) const;
 
   using iterator = Iterator;
   using const_iterator = Iterator;

@@ -233,8 +233,8 @@ void buildAndCheck(KVs kvs) {
 
 std::vector<std::string> permutes() {
   std::vector<std::string> bits{
-    "abcde", "fgh", "fij", "iiii", "iix",
-    "a", "b", "c", "d", "e", ""
+    "abcde", "fgh", "fij", "iiii", "iik",
+    "aa", "bb", "cc", "dd", "ee", "x", "y", "z"
   };
 
   std::vector<std::string> results;
@@ -284,7 +284,7 @@ TEST(TrieTest, keys) {
   LOG(INFO) << "*** 3";
   buildAndCheck({"a","b"});
   LOG(INFO) << "*** 4";
-  buildAndCheck({"a","abc","adbx","adcde","cde"});
+  buildAndCheck({"ab","acc","adbx","adcde","cde"});
   LOG(INFO) << "*** 5";
   buildAndCheck(permutes());
   LOG(INFO) << "*** 5";
@@ -293,21 +293,24 @@ TEST(TrieTest, keys) {
 
 TEST(TrieTest, lowerBound) {
   std::vector<std::string> keys{
-    "abcd", "abcdefg", "bcde", "bcdefg", "bcdehij", "bcdehil", "bcdehim", "cde", "cdfgh", "cdxyz"
+    "abcda", "abcdefg", "bcdea", "bcdefg", "bcdehij", "bcdehil", "bcdehim", "cde", "cdfgh", "cdxyz"
   };
   auto [tree, facts] = mkTree(keys);
 
   EXPECT_EQ(Keys{tree.keys()}, Keys{keys});
 
-  EXPECT_EQ(tree.lower_bound(key("aaa")).getKey(), key("abcd"));
-  EXPECT_EQ(tree.lower_bound(key("abcd")).getKey(), key("abcd"));
+  EXPECT_EQ(tree.lower_bound(key("aaa")).getKey(), key("abcda"));
+  EXPECT_EQ(tree.lower_bound(key("abcd")).getKey(), key("abcda"));
+  EXPECT_EQ(tree.lower_bound(key("abcda")).getKey(), key("abcda"));
+  EXPECT_EQ(tree.lower_bound(key("abcdb")).getKey(), key("abcdefg"));
   EXPECT_EQ(tree.lower_bound(key("abcde")).getKey(), key("abcdefg"));
   EXPECT_EQ(tree.lower_bound(key("abcdef")).getKey(), key("abcdefg"));
   EXPECT_EQ(tree.lower_bound(key("abcdefg")).getKey(), key("abcdefg"));
-  EXPECT_EQ(tree.lower_bound(key("abcdefh")).getKey(), key("bcde"));
+  EXPECT_EQ(tree.lower_bound(key("abcdefh")).getKey(), key("bcdea"));
 
-  EXPECT_EQ(tree.lower_bound(key("bcde")).getKey(), key("bcde"));
-  EXPECT_EQ(tree.lower_bound(key("bcdea")).getKey(), key("bcdefg"));
+  EXPECT_EQ(tree.lower_bound(key("bcde")).getKey(), key("bcdea"));
+  EXPECT_EQ(tree.lower_bound(key("bcdea")).getKey(), key("bcdea"));
+  EXPECT_EQ(tree.lower_bound(key("bcdeb")).getKey(), key("bcdefg"));
   EXPECT_EQ(tree.lower_bound(key("bcdef")).getKey(), key("bcdefg"));
   EXPECT_EQ(tree.lower_bound(key("bcdefh")).getKey(), key("bcdehij"));
   EXPECT_EQ(tree.lower_bound(key("bcdeh")).getKey(), key("bcdehij"));
@@ -334,7 +337,7 @@ TEST(TrieTest, lowerBound2) {
 
 TEST(TrieTest, prefixIter) {
   std::vector<std::string> keys{
-    "abcd", "abcdefg", "bcde", "bcdefg", "bcdehij", "bcdehil", "bcdehim", "cde", "cdfgh", "cdxyz"
+    "abcda", "abcdefg", "bcdea", "bcdefg", "bcdehij", "bcdehil", "bcdehim", "cde", "cdfgh", "cdxyz"
   };
   auto [tree, facts] = mkTree(keys);
 

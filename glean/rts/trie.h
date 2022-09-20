@@ -20,13 +20,15 @@ namespace roart {
 
 class Tree final {
   struct Node;
-  struct Node0;
   struct Node4;
   struct Node16;
   struct Node48;
   struct Node256;
 
 public:
+  struct Node0;
+
+  /*
   struct Value {
     Id id;
     Pid type;
@@ -48,12 +50,23 @@ public:
       FactIterator::Demand demand,
       std::vector<unsigned char>& buf) const;
   };
+  */
+
+  static Fact::Ref get(
+    const Node0 *node,
+    FactIterator::Demand demand,
+    std::vector<unsigned char>& buf);
+  static folly::ByteRange value(const Node0 *node);
+  struct FactInfo { Pid type; uint32_t key_size; uint32_t value_size; };
+  static FactInfo info(const Node0 *node);
+  static Pid type(const Node0 *node);
 
 private:
   struct Allocator;
 
   Node * FOLLY_NULLABLE root = nullptr;
   Allocator * allocator;
+  Pid pid;
   uint32_t max_key_size = 0;
   uint32_t max_value_size = 0;
   size_t count = 0;
@@ -61,24 +74,37 @@ private:
 
 public:
   struct Stats {
-    size_t node0 = 0;
-    size_t node4 = 0;
-    size_t node16 = 0;
-    size_t node48 = 0;
-    size_t node256 = 0;
+    struct Ty {
+      size_t count = 0;
+      size_t bytes = 0;
+      size_t children = 0;
+    };
 
-    size_t node4_children = 0;
-    size_t node16_children = 0;
-    size_t node48_children = 0;
-    size_t node256_children = 0;
-
-    size_t prefix_length = 0;
+    Ty node0;
+    Ty node4;
+    Ty node16;
+    Ty node48;
+    Ty node256;
 
     size_t bytes = 0;
+    size_t data_size = 0;
+    size_t data_used = 0;
     size_t key_size = 0;
-    size_t arena_size = 0;
+    size_t wasted = 0;
 
-    size_t nodes() const { return node0 + node4 + node16 + node48 + node256; }
+    Stats& operator+=(const Stats& other) {
+      for (auto i = 0; i < sizeof(Stats) / sizeof(size_t); ++i) {
+        reinterpret_cast<size_t *>(this)[i] +=
+          reinterpret_cast<const size_t *>(&other)[i];
+      }
+      return *this;
+    }
+
+    Stats operator+(const Stats& other) const {
+      Stats s(*this);
+      s += other;
+      return s;
+    }
   };
 
   struct Buffer {
@@ -147,7 +173,11 @@ public:
     std::optional<Id> lower_bound() override { return {}; }
     std::optional<Id> upper_bound() override { return {}; }
 
-    const Value *operator*() const;
+    const Node0 * operator*() const {
+      assert(node != nullptr);
+      return node;
+    }
+
     Iterator& operator++() {
       next();
       return *this;
@@ -189,10 +219,11 @@ public:
   using iterator = Iterator;
   using const_iterator = Iterator;
 
-  Tree();
+  explicit Tree(Pid pid);
   Tree(const Tree& other) = delete;
   Tree(Tree&& other) noexcept {
     root = other.root;
+    pid = other.pid;
     max_key_size = other.max_key_size;
     max_value_size = other.max_value_size;
     allocator = other.allocator;
@@ -210,6 +241,7 @@ public:
     if (this != &other) {
       clear();
       root = other.root;
+      pid = other.pid;
       max_key_size = other.max_key_size;
       max_value_size = other.max_value_size;
       allocator = other.allocator;
@@ -242,7 +274,7 @@ public:
   Iterator lower_bound(folly::ByteRange key) const;
   Iterator lower_bound(folly::ByteRange key, size_t prefix_size) const;
 
-  const Value * FOLLY_NULLABLE insert(Fact::Clause clause, const Value *fact);
+  std::pair<const Node0 * FOLLY_NULLABLE, bool> insert(Id id, Fact::Clause clause);
 
   std::vector<std::string> keys() const;
 
@@ -259,14 +291,13 @@ inline std::ostream& operator<<(std::ostream& s, const Tree& tree) {
 }
 
 inline std::ostream& operator<<(std::ostream& s, const Tree::Stats& stats) {
-  return s << "total: " << stats.nodes()
-    << " n0: " << stats.node0
-    << " n4: " << stats.node4
-    << " n16: " << stats.node16
-    << " n48: " << stats.node48
-    << " n256: " << stats.node256
+  return s
+    << " n0: " << stats.node0.count
+    << " n4: " << stats.node4.count
+    << " n16: " << stats.node16.count
+    << " n48: " << stats.node48.count
+    << " n256: " << stats.node256.count
     << " size: " << stats.bytes
-    << " plen: " << stats.prefix_length
     << " keysz: " << stats.key_size;
 }
 

@@ -67,10 +67,12 @@ bool operator>=(const kv& x, const kv& y) {
   return y <= x;
 }
 
+static constexpr Pid pid = Pid::fromWord(123);
+
 Fact::unique_ptr mkfact(const kv& fact) {
   return Fact::create(Fact::Ref{
     nextId++,
-    Pid::fromWord(123),
+    pid,
     Fact::Clause{
       reinterpret_cast<const unsigned char *>(fact.data.data()),
       fact.key_size,
@@ -81,11 +83,11 @@ Fact::unique_ptr mkfact(const kv& fact) {
 
 struct Entry {
   Fact::unique_ptr fact;
-  std::unique_ptr<roart::Tree::Value> value;
+  const roart::Tree::Node0 *leaf;
 };
 
 struct Storage {
-  roart::Tree tree;
+  roart::Tree tree{pid};
   std::vector<Entry> facts;
 };
 
@@ -165,10 +167,9 @@ Storage mkTree(const KVs& facts) {
   Storage storage;
   for (const auto& kv : facts.kvs) {
     auto fact = mkfact(kv);
-    auto value = std::make_unique<roart::Tree::Value>(fact->ref());
-    const auto old = storage.tree.insert(fact->clause(), value.get());
-    if (old == nullptr) {
-      storage.facts.push_back(Entry{std::move(fact), std::move(value)});
+    const auto r = storage.tree.insert(fact->id(), fact->clause());
+    if (r.second) {
+      storage.facts.push_back(Entry{std::move(fact), r.first});
     }
   }
   return storage;
@@ -206,8 +207,8 @@ void buildAndCheck(KVs kvs) {
   EXPECT_EQ(tree.size(), kvs.kvs.size());
 
   for (const auto& entry : facts) {
-    const auto b = tree.insert(entry.fact->clause(), entry.value.get());
-    EXPECT_NE(b, nullptr);
+    const auto r = tree.insert(entry.fact->id(), entry.fact->clause());
+    EXPECT_FALSE(r.second);
     auto it = tree.find(entry.fact->key());
     EXPECT_FALSE(it.done());
     EXPECT_EQ(it.get().key(), entry.fact->key());

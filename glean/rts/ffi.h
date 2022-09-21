@@ -249,6 +249,24 @@ const char *glean_lookup_serialize(
   size_t *ids_size
 );
 
+const char *glean_lookup_contains_by_id(
+  Lookup *big,
+  Lookup *small,
+  bool *result
+);
+
+const char *glean_lookup_contains_by_key(
+  Lookup *big,
+  Lookup *small,
+  bool *result
+);
+
+const char *glean_lookup_seek_count(
+  Lookup *lookup,
+  int64_t pid,
+  size_t *count
+);
+
 const char *glean_define_fact(
   Define *facts,
   glean_predicate_id_t predicate,

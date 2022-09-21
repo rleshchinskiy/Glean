@@ -17,6 +17,9 @@ module Glean.RTS.Foreign.Lookup
   , Limits(..)
   , serialize
   , withSnapshot
+  , containsById
+  , containsByKey
+  , seekCount
 ) where
 
 import Control.Exception (bracket, mask_)
@@ -31,7 +34,7 @@ import Foreign.Ptr
 import Util.FFI
 
 import Glean.FFI
-import Glean.RTS.Types (Fid(..), invalidFid)
+import Glean.RTS.Types (Fid(..), invalidFid, Pid(..))
 import qualified Glean.Types as Thrift
 
 -- | A reference to a thing we can look up facts in
@@ -121,6 +124,25 @@ withSnapshot base boundary f =
     glean_lookup_free
     (\p -> f (Lookup p (lookupName base)))
 
+containsById :: (CanLookup a, CanLookup b) => a -> b -> IO Bool
+containsById big small =
+  withLookup big $ \big_ptr ->
+  withLookup small $ \small_ptr -> do
+    r <- invoke $ glean_lookup_contains_by_id big_ptr small_ptr
+    return $ r /= 0
+
+containsByKey :: (CanLookup a, CanLookup b) => a -> b -> IO Bool
+containsByKey big small =
+  withLookup big $ \big_ptr ->
+  withLookup small $ \small_ptr -> do
+    r <- invoke $ glean_lookup_contains_by_key big_ptr small_ptr
+    return $ r /= 0
+
+seekCount :: CanLookup a => a -> Pid -> IO Int
+seekCount look (Pid pid) =
+  withLookup look $ \look_ptr ->
+  fmap fromIntegral $ invoke $ glean_lookup_seek_count look_ptr pid
+
 foreign import ccall unsafe glean_lookup_empty
   :: Ptr (Ptr Lookup) -> IO CString
 
@@ -156,5 +178,24 @@ foreign import ccall safe glean_lookup_serialize
   -> Ptr (Ptr ())
   -> Ptr CSize
   -> Ptr (Ptr Fid)
+  -> Ptr CSize
+  -> IO CString
+
+foreign import ccall safe glean_lookup_contains_by_id
+  :: Ptr Lookup
+  -> Ptr Lookup
+  -> Ptr CBool
+  -> IO CString
+
+
+foreign import ccall safe glean_lookup_contains_by_key
+  :: Ptr Lookup
+  -> Ptr Lookup
+  -> Ptr CBool
+  -> IO CString
+
+foreign import ccall safe glean_lookup_seek_count
+  :: Ptr Lookup
+  -> Int64
   -> Ptr CSize
   -> IO CString

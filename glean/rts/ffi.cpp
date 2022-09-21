@@ -388,6 +388,64 @@ const char *glean_lookup_serialize(
   });
 }
 
+const char *glean_lookup_contains_by_id(
+    Lookup *big,
+    Lookup *small,
+    bool *result) {
+  return ffi::wrap([=] {
+    *result = true;
+    auto iter = small->enumerate();
+    while (const auto ref = iter->get()) {
+      const auto found = big->factById(ref.id, [&](auto type, auto clause) {
+        if (type != ref.type || clause.key() != ref.clause.key()) {
+          *result = false;
+        }
+      });
+      if (!found) {
+        *result = false;
+      }
+      if (!*result) {
+        return;
+      }
+      iter->next();
+    }
+    *result = true;
+  });
+}
+
+const char *glean_lookup_contains_by_key(
+    Lookup *big,
+    Lookup *small,
+    bool *result) {
+  return ffi::wrap([=] {
+    auto iter = small->enumerate();
+    while (const auto ref = iter->get()) {
+      const auto id = big->idByKey(ref.type, ref.key());
+      if (id != ref.id) {
+        *result = false;
+        return;
+      }
+      iter->next();
+    }
+    *result = true;
+  });
+}
+
+const char *glean_lookup_seek_count(
+    Lookup *lookup,
+    int64_t pid,
+    size_t *count) {
+  return ffi::wrap([=] {
+    size_t n = 0;
+    auto iter = lookup->seek(Pid::fromThrift(pid), {}, 0);
+    while (auto ref = iter->get(FactIterator::Demand::KeyOnly)) {
+      ++n;
+      iter->next();
+    }
+    *count = n;
+  });
+}
+
 const char *glean_define_fact(
     Define *facts,
     glean_predicate_id_t predicate,

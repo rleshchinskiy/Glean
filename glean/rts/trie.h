@@ -28,30 +28,6 @@ class Tree final {
 public:
   struct Node0;
 
-  /*
-  struct Value {
-    Id id;
-    Pid type;
-    uint32_t key_size;
-    uint32_t value_size;
-    mutable Node0 *node0;
-
-    Value() = default;
-    explicit Value(Fact::Ref fact) {
-      id = fact.id;
-      type = fact.type;
-      key_size = fact.clause.key_size;
-      value_size = fact.clause.value_size;
-    }
-
-    folly::ByteRange value() const;
-
-    Fact::Ref get(
-      FactIterator::Demand demand,
-      std::vector<unsigned char>& buf) const;
-  };
-  */
-
   static Fact::Ref get(
     const Node0 *node,
     FactIterator::Demand demand,
@@ -62,15 +38,23 @@ public:
   static Pid type(const Node0 *node);
 
 private:
+  struct Impl;
+  friend class Impl;
+
   struct Allocator;
 
-  Node * FOLLY_NULLABLE root = nullptr;
+  /*
+  uintptr_t root = 0;
+  // Node * FOLLY_NULLABLE root = nullptr;
   Allocator * allocator;
   Pid pid;
   uint32_t max_key_size = 0;
   uint32_t max_value_size = 0;
   size_t count = 0;
   size_t keymem = 0;
+  */
+
+  Impl * FOLLY_NULLABLE impl;
 
 public:
   struct Stats {
@@ -146,6 +130,7 @@ public:
     }
   };
 
+  /*
   Buffer buffer() const {
     return Buffer(max_key_size + max_value_size);
   }
@@ -153,6 +138,7 @@ public:
   Buffer buffer(folly::ByteRange prefix) const {
     return Buffer(max_key_size + max_value_size, prefix);
   }
+  */
 
   struct Iterator final : FactIterator {
     const Node0 * FOLLY_NULLABLE node = nullptr;
@@ -194,7 +180,8 @@ public:
 
   friend struct Iterator;
 
-
+  struct Cursor;
+  /*
   struct Cursor final {
     const Node * FOLLY_NULLABLE node = nullptr;
     Buffer buffer;
@@ -215,6 +202,7 @@ public:
   };
 
   Cursor cursorAt(folly::ByteRange prefix, const Node *node) const;
+  */
 
   using iterator = Iterator;
   using const_iterator = Iterator;
@@ -222,35 +210,14 @@ public:
   explicit Tree(Pid pid);
   Tree(const Tree& other) = delete;
   Tree(Tree&& other) noexcept {
-    root = other.root;
-    pid = other.pid;
-    max_key_size = other.max_key_size;
-    max_value_size = other.max_value_size;
-    allocator = other.allocator;
-    count = other.count;
-    keymem = other.keymem;
-    other.root = nullptr;
-    other.count = 0;
-    other.keymem = 0;
-    other.max_key_size = 0;
-    other.max_value_size = 0;
-    other.allocator = nullptr;
+    impl = other.impl;
+    other.impl = nullptr;
   }
   Tree& operator=(const Tree& other) = delete;
   Tree& operator=(Tree&& other) noexcept {
-    if (this != &other) {
-      clear();
-      root = other.root;
-      pid = other.pid;
-      max_key_size = other.max_key_size;
-      max_value_size = other.max_value_size;
-      allocator = other.allocator;
-      count = other.count;
-      keymem = other.keymem;
-      other.root = nullptr;
-      other.count = 0;
-      other.keymem = 0;
-      other.allocator = nullptr;
+    if (impl != other.impl) {
+      impl = other.impl;
+      other.impl = nullptr;
     }
     return *this;
   }
@@ -258,13 +225,19 @@ public:
 
   void clear() noexcept;
 
+  /*
   bool empty() const noexcept {
-    return root != nullptr;
+    return root != 0;
   }
 
   size_t size() const noexcept {
     return count;
   }
+  */
+
+  bool empty() const noexcept;
+
+  size_t size() const noexcept;
 
   Iterator begin() const;
   Iterator end() const {

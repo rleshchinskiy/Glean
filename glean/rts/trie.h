@@ -72,6 +72,7 @@ public:
 
     size_t bytes = 0;
     size_t data_size = 0;
+    size_t data_allocated = 0;
     size_t data_used = 0;
     size_t key_size = 0;
     size_t wasted = 0;

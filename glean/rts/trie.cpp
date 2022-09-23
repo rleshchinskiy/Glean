@@ -292,8 +292,41 @@ struct Tree::Node {
     return ConstPtr(reinterpret_cast<const Node *>(p), T::type);
   }
 
+  struct Uplink {
+    union {
+      uintptr_t val;
+      unsigned char bytes[8];
+    };
+
+    static constexpr uintptr_t MASK = (uintptr_t(1) << 56) - 1;
+
+    Uplink() : val(0) {}
+    Uplink(Ptr ptr, uint8_t index)
+      : val((ptr.to_uintptr_t() & MASK) | (uintptr_t(index) << 56)) {}
+
+    unsigned char index() const {
+      return static_cast<unsigned char>(val >> 56);
+    }
+
+    Ptr ptr() const {
+      return Ptr::from_uintptr_t(val & MASK);
+    }
+
+    bool null() const {
+      return val == 0;
+    }
+
+    void setIndex(unsigned char index) {
+      bytes[7] = index;
+    }
+  };
+
+  /*
   unsigned char index;
   Ptr parent;
+  */
+
+  Uplink parent;
 
   struct Prefix {
     const unsigned char *data;
@@ -775,19 +808,21 @@ Fact::Ref Tree::get(
   assert(leaf->key_size >= prefix.size);
   auto pos = buf.data() + leaf->key_size - prefix.size;
   std::memcpy(pos, prefix.data, prefix.size + vsize);
-  auto index = leaf->node.index;
   auto current = leaf->node.parent;
-  while (current != Node::null) {
-    const auto prefix = current->getPrefix();
+  // auto index = leaf->node.index;
+  // auto current = leaf->node.parent;
+  while (!current.null()) {
+    const auto index = current.index();
+    const auto node = current.ptr();
+    const auto prefix = node->getPrefix();
     assert(prefix.size + 1 <= pos - buf.data());
     --pos;
-    *pos = Node::dispatch(current, [&](const auto *p) { return p->byteAt(index); });
+    *pos = Node::dispatch(node, [&](const auto *p) { return p->byteAt(index); });
     pos -= prefix.size;
     if (prefix.size != 0) {
       std::memcpy(pos, prefix.data, prefix.size);
     }
-    index = current->index;
-    current = current->parent;
+    current = node->parent;
   }
   return Fact::Ref{
     leaf->id,
@@ -836,8 +871,6 @@ Tree::Node::Insert Tree::Node::insert(
     // pre->node.prefix = prefix;
     // pre->node.prefix_size = p - prefix;
     pre->node.parent = parent;
-    pre->node.index = index;
-    parent = Node::ptr(pre);
     const auto byte = static_cast<unsigned char>(*p);
     /*
     prefix_size = (prefix + prefix_size) - (p+1);
@@ -848,18 +881,21 @@ Tree::Node::Insert Tree::Node::insert(
     clause.key_size -= (k+1) - clause.data;
     clause.data = k+1;
     auto leaf = newNode0(allocator, clause);
-    leaf->node.parent = Node::ptr(pre);
+    unsigned char my_index;
+    unsigned char leaf_index;
     if (byte < *k) {
-      index = 0;
-      leaf->node.index = 1;
+      my_index =  0;
+      leaf_index = 1;
     } else {
-      index = 1;
-      leaf->node.index = 0;
+      my_index = 1;
+      leaf_index = 0;
     }
-    pre->bytes[index] = byte;
-    pre->children[index] = me;
-    pre->bytes[leaf->node.index] = *k;
-    pre->children[leaf->node.index] = Node::ptr(leaf);
+    parent = Uplink(Node::ptr(pre), my_index);
+    leaf->node.parent = Uplink(Node::ptr(pre), leaf_index);
+    pre->bytes[my_index] = byte;
+    pre->children[my_index] = me;
+    pre->bytes[leaf_index] = *k;
+    pre->children[leaf_index] = Node::ptr(leaf);
     assert(pre->bytes[0] < pre->bytes[1]);
     me = ptr(pre);
     return Insert::inserted(leaf);
@@ -904,11 +940,10 @@ Tree::Node::Insert Tree::Node4::insert(
       while (i > 0 && bytes[i-1] > byte) {
         bytes[i] = bytes[i-1];
         children[i] = children[i-1];
-        children[i]->index = i;
+        children[i]->parent.setIndex(i);
         --i;
       }
-      leaf->node.parent = Node::ptr(this);
-      leaf->node.index = i;
+      leaf->node.parent = Node::Uplink(Node::ptr(this), i);
       bytes[i] = byte;
       children[i] = Node::ptr(leaf);
       auto b = bytes[0];
@@ -921,17 +956,15 @@ Tree::Node::Insert Tree::Node4::insert(
       for (i = 0; i < 4 && bytes[i] < byte; ++i) {
         c->bytes[i] = bytes[i];
         c->children[i] = children[i];
-        c->children[i]->parent = Node::ptr(c);
+        c->children[i]->parent = Node::Uplink(Node::ptr(c), i);
       }
-      leaf->node.parent = Node::ptr(c);
-      leaf->node.index = i;
+      leaf->node.parent = Node::Uplink(Node::ptr(c), i);
       c->bytes[i] = byte;
       c->children[i] = Node::ptr(leaf);
       while (i<4) {
         c->bytes[i+1] = bytes[i];
         c->children[i+1] = children[i];
-        c->children[i+1]->index = i+1;
-        c->children[i+1]->parent = Node::ptr(c);
+        c->children[i+1]->parent = Node::Uplink(Node::ptr(c), i+1);
         ++i;
       }
       allocator.free(this);
@@ -962,11 +995,10 @@ Tree::Node::Insert Tree::Node16::insert(
       while (i > 0 && bytes[i-1] > byte) {
         bytes[i] = bytes[i-1];
         children[i] = children[i-1];
-        children[i]->index = i;
+        children[i]->parent.setIndex(i);
         --i;
       }
-      leaf->node.parent = Node::ptr(this);
-      leaf->node.index = i;
+      leaf->node.parent = Node::Uplink(Node::ptr(this), i);
       bytes[i] = byte;
       children[i] = Node::ptr(leaf);
     } else {
@@ -975,10 +1007,9 @@ Tree::Node::Insert Tree::Node16::insert(
         c->bytes[i] = bytes[i];
         c->indices[bytes[i]] = i;
         c->children[i] = children[i];
-        c->children[i]->parent = Node::ptr(c);
+        c->children[i]->parent = Node::Uplink(Node::ptr(c), i);
       }
-      leaf->node.parent = Node::ptr(c);
-      leaf->node.index = i;
+      leaf->node.parent = Node::Uplink(Node::ptr(c), i);
       c->bytes[i] = byte;
       c->indices[byte] = i;
       c->children[i] = Node::ptr(leaf);
@@ -986,8 +1017,7 @@ Tree::Node::Insert Tree::Node16::insert(
         c->bytes[i+1] = bytes[i];
         c->indices[bytes[i]] = i+1;
         c->children[i+1] = children[i];
-        c->children[i+1]->index = i+1;
-        c->children[i+1]->parent = Node::ptr(c);
+        c->children[i+1]->parent = Node::Uplink(Node::ptr(c), i+1);
         ++i;
       }
       allocator.free(this);
@@ -1018,11 +1048,10 @@ Tree::Node::Insert Tree::Node48::insert(
         bytes[i] = bytes[i-1];
         indices[bytes[i]] = static_cast<unsigned char>(i);
         children[i] = children[i-1];
-        children[i]->index = i;
+        children[i]->parent.setIndex(i);
         --i;        
       }
-      leaf->node.parent = Node::ptr(this);
-      leaf->node.index = i;
+      leaf->node.parent = Node::Uplink(Node::ptr(this), i);
       bytes[i] = byte;
       indices[byte] = i;
       children[i] = Node::ptr(leaf);
@@ -1031,12 +1060,10 @@ Tree::Node::Insert Tree::Node48::insert(
       for (i = 0; i < 256; ++i) {
         if (indices[i] != 0xFF) {
           c->children[i] = children[indices[i]];
-          c->children[i]->index = i;
-          c->children[i]->parent = Node::ptr(c);
+          c->children[i]->parent = Node::Uplink(Node::ptr(c), i);
         }
       }
-      leaf->node.parent = Node::ptr(c);
-      leaf->node.index = byte;
+      leaf->node.parent = Node::Uplink(Node::ptr(c), byte);
       c->children[byte] = Node::ptr(leaf);
       allocator.free(this);
       me = Node::ptr(c);
@@ -1059,8 +1086,7 @@ Tree::Node::Insert Tree::Node256::insert(
     return Node::Insert::cont(&children[byte], clause.data);
   } else {
     auto leaf = Node::newNode0(allocator, clause);
-    leaf->node.index = byte;
-    leaf->node.parent = Node::ptr(this);
+    leaf->node.parent = Node::Uplink(Node::ptr(this), byte);
     children[byte] = Node::ptr(leaf);
     return Node::Insert::inserted(leaf);
   }
@@ -1107,8 +1133,7 @@ std::pair<const Tree::Node0 * FOLLY_NULLABLE, bool> Tree::insert(
   Node::Insert ins;
   if (impl->root == Node::null) {
     const auto leaf = Node::newNode0(impl->allocator, clause);
-    leaf->node.parent = Node::null;
-    leaf->node.index = 0;
+    leaf->node.parent = {};
     impl->root = Node::ptr(leaf);
     ins = Node::Insert::inserted(leaf);
   } else {
@@ -1164,7 +1189,7 @@ void Tree::Buffer::leave(const Node *node) {
   const auto prefix = node->getPrefix();
   assert(size >= prefix.size);
   size -= prefix.size;
-  if (node->parent != Node::null) {
+  if (!node->parent.null()) {
     assert(size > 0);
     --size;
   }
@@ -1265,7 +1290,7 @@ Tree::Iterator Tree::Cursor::leftmost() && {
 
 Tree::Cursor& Tree::Cursor::down(unsigned char byte, Node::ConstPtr child) & {
   assert(child != Node::null);
-  assert(child->parent == node);
+  assert(child->parent.ptr() == node);
   buffer.enter(byte, child.pointer());
   node = child;
   return *this;
@@ -1278,8 +1303,8 @@ Tree::Cursor&& Tree::Cursor::down(unsigned char byte, Node::ConstPtr child) && {
 unsigned char Tree::Cursor::up() {
   assert(node != Node::null);
   buffer.leave(node.pointer());
-  const auto index = node->index;
-  node = buffer.size >= prefixlen ? node->parent : Node::null;
+  const auto index = node->parent.index();
+  node = buffer.size >= prefixlen ? node->parent.ptr() : Node::null;
   return index;
 }
 
@@ -1556,15 +1581,15 @@ void Tree::Node::validate(ConstPtr node) {
 
 void Tree::Node::validate(ConstPtr node, ConstPtr p, unsigned int i, unsigned int b) {
   validate(node);
-  if (node->parent != p) {
+  if (node->parent.ptr() != p) {
     LOG(ERROR) << node.typeString()
       << "::validate: invalid parent (expected " << p.typeString()
-      << ", got " << node->parent.typeString() << ")";
-  } else if (node->index != i) {
+      << ", got " << node->parent.ptr().typeString() << ")";
+  } else if (node->parent.index() != i) {
     LOG(ERROR) << node.typeString()
       << "::validate: invalid index (parent " << p.typeString()
       << ", expected " << int(i)
-      << ", got " << int(node->index) << ")";
+      << ", got " << int(node->parent.index()) << ")";
   }
 }
 

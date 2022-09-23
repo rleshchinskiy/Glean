@@ -8,6 +8,8 @@
 
 #include "glean/rts/factset.h"
 
+#include <fstream>
+
 namespace facebook {
 namespace glean {
 namespace rts {
@@ -47,14 +49,39 @@ FactSet::FactSet(FactSet&&) = default;
 FactSet& FactSet::operator=(FactSet&&) = default;
 FactSet::~FactSet() noexcept = default;
 
+namespace {
+
+void dumpStats(std::ostream& os, const roart::Tree::Stats& stats) {
+  os
+    << stats.data_size << ','
+    << stats.data_allocated << ','
+    << stats.data_used << ','
+    << stats.key_size << ','
+    << stats.wasted << ','
+    << stats.node0.count << "," << stats.node0.bytes << ","
+    << stats.node4.count << "," << stats.node4.bytes << ","
+    << stats.node16.count << "," << stats.node16.bytes << ","
+    << stats.node48.count << "," << stats.node48.bytes << ","
+    << stats.node256.count << "," << stats.node256.bytes;
+}
+
+}
+
 size_t FactSet::allocatedMemory() const noexcept {
   size_t mem = facts.allocatedMemory() + keys.allocatedMemory();
   roart::Tree::Stats stats;
-  for (const auto& [_,tree] : keys) {
+  std::ofstream statsfile("/tmp/stats", std::ios_base::app);
+  statsfile << "pid,dsize,dallocated,dused,keys,wasted,leaf_c,leaf_b,n4_c,n4_b,n16_c,n16_b,n48_c,n48_b,n256_c,n256_b\n";
+  for (const auto& [pid,tree] : keys) {
+    auto s = tree.stats();
+    statsfile << pid.toWord() << ",";
+    dumpStats(statsfile, s);
+    statsfile << "\n";
     stats += tree.stats();
   }
   LOG(INFO)
     << "dsize " << stats.data_size
+    << " dallocated " << stats.data_allocated
     << " dused " << stats.data_used
     << " wasted " << stats.wasted
     << " leaf " << stats.node0.count << " (" << stats.node0.bytes << ")"

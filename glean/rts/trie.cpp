@@ -333,40 +333,33 @@ struct Tree::Node {
     uint32_t size;
   };
 
-  uint32_t prefix_size_;
-  const unsigned char *prefix_;
+  union {
+    struct {
+      uint32_t data32;
+      uint32_t prefix_size;
+      const unsigned char *prefix;
+    };
+    struct {
+      unsigned char spare[4];
+      unsigned char short_prefix_size;
+      unsigned char prefix_bytes[11];
+    };
+  };
+
 
   static constexpr size_t pfx_avail() {
-    return offsetof(Tree::Node, prefix_) + sizeof(prefix_) - offsetof(Tree::Node, prefix_size_);
-  }
-
-  void copyPrefix(Allocator& allocator, Prefix pfx, uint32_t real_size); /* {
-    assert(real_size < 0x80000000Ul);
-    prefix_size_ = pfx.size >> 1;
-    unsigned char *buf;
-    if (real_size < pfx_avail() - 1) {
-      buf = reinterpret_cast<unsigned char *>(&prefix_size_) + 1;
-    } else {
-      prefix_size_ |= 1;
-      buf = allocator.allocate(real_size);
-      prefix_ = buf;
-    }
-    std::memcpy(buf, pfx.data, real_size);
-  } */
-
-  void copyPrefix(Allocator& allocator, Prefix pfx) {
-    copyPrefix(allocator, pfx, pfx.size);
+    return sizeof(prefix_bytes);
   }
 
   void setPrefix(Prefix pfx, uint32_t real_size) {
     assert(real_size < 0x80000000Ul);
     assert(pfx.size <= real_size);
-    prefix_size_ = pfx.size << 1;
-    if (real_size <= pfx_avail() - 1) {
-      std::memcpy(reinterpret_cast<unsigned char *>(&prefix_size_) + 1, pfx.data, real_size);
+    if (real_size <= sizeof(prefix_bytes)) {
+      short_prefix_size = pfx.size << 1;
+      std::memcpy(prefix_bytes, pfx.data, real_size);
     } else {
-      prefix_size_ |= 1;
-      prefix_ = pfx.data;
+      prefix_size = (pfx.size << 1) | 1;
+      prefix = pfx.data;
     }
   }
 
@@ -394,16 +387,10 @@ struct Tree::Node {
   } */
 
   Prefix getPrefix() const {
-    if ((prefix_size_ & 1) == 0) {
-      return Prefix{
-        reinterpret_cast<const unsigned char *>(&prefix_size_) + 1,
-        (prefix_size_ & 0xff) >> 1
-      };
+    if ((short_prefix_size & 1) == 0) {
+      return Prefix{prefix_bytes, uint32_t(short_prefix_size) >> 1};
     } else {
-      return Prefix{
-        prefix_,
-        prefix_size_ >> 1
-      };
+      return Prefix{prefix, prefix_size >> 1};
     }
   }
 
@@ -483,8 +470,58 @@ const Tree::Node::Ptr Tree::Node::null;
 struct Tree::Node0 {
   Node node;
   Id id;
-  uint32_t key_size;
-  uint32_t value_size;
+  // uint32_t key_size;
+  // uint32_t value_size;
+
+  static constexpr uint32_t HAS_VALUE_BIT = uint32_t(1) << 31;
+  static constexpr uint32_t SIZE_MASK = HAS_VALUE_BIT - 1;
+
+  void set_sizes(Fact::Clause clause) {
+    assert(clause.key_size < HAS_VALUE_BIT);
+    node.data32 = clause.key_size;
+    if (clause.value_size > 0) {
+      node.data32 |= HAS_VALUE_BIT;
+    }
+  }
+
+  uint32_t key_size() const {
+    return node.data32 & SIZE_MASK;
+  }
+
+  bool hasValue() const {
+    return (node.data32 & HAS_VALUE_BIT) != 0;
+  }
+
+  void setClause(Allocator& allocator, Fact::Clause clause);
+
+  folly::ByteRange value() const {
+    if (!hasValue()) {
+      return folly::ByteRange(node.prefix_bytes, size_t(0));
+    } else {
+      const auto p = node.prefix + (node.prefix_size >> 1);
+      return folly::ByteRange(p+4, folly::loadUnaligned<uint32_t>(p));
+    }
+  }
+
+  uint32_t value_size() const {
+    if (!hasValue()) {
+      return 0;
+    } else {
+      const auto p = node.prefix + (node.prefix_size >> 1);
+      return folly::loadUnaligned<uint32_t>(p);
+    }
+  }
+
+  /*
+  uint32_t value_size() const {
+    if ((node.data32 & HAS_VALUE_BIT) == 0) {
+      return 0;
+    } else {
+      const auto prefix = node.getPrefix();
+      return folly::loadUnaligned<uint32_t>(prefix.data + prefix.size);
+    }
+  }
+  */
 
   static constexpr Node::Type type = Node::Type::N0;
 
@@ -771,7 +808,7 @@ NodeT *Tree::Node::cloneAs(Allocator& allocator, const Node& node) {
 
 Tree::Node0 *Tree::Node::newNode0(Allocator& allocator, Fact::Clause clause) {
   auto node0 = allocator.alloc<Node0>();
-  node0->node.copyPrefix(allocator, {clause.data, clause.key_size}, clause.size());
+  node0->setClause(allocator, clause);
   /*
   auto buf = static_cast<unsigned char *>(
     allocator.allocate(clause.size()));
@@ -785,12 +822,13 @@ Tree::Node0 *Tree::Node::newNode0(Allocator& allocator, Fact::Clause clause) {
 }
 
 folly::ByteRange Tree::value(const Node0 *leaf) {
-  const auto prefix = leaf->node.getPrefix();
-  return {prefix.data + prefix.size, leaf->value_size};
+  return leaf->value();
+  // const auto prefix = leaf->node.getPrefix();
+  // return {prefix.data + prefix.size, leaf->value_size};
 }
 
 Tree::FactInfo Tree::info(const Tree::Node0 *leaf) {
-  return {Allocator::leafPid(leaf), leaf->key_size, leaf->value_size};
+  return {Allocator::leafPid(leaf), leaf->key_size(), leaf->value_size()};
 }
 
 Pid Tree::type(const Tree::Node0 *leaf) {
@@ -802,12 +840,15 @@ Fact::Ref Tree::get(
     FactIterator::Demand demand,
     std::vector<unsigned char>& buf) {
   assert(leaf != nullptr);
-  const auto vsize = demand == FactIterator::Demand::KeyOnly ? 0 : leaf->value_size;
-  buf.resize(leaf->key_size + vsize);
+  const auto vsize = demand == FactIterator::Demand::KeyOnly ? 0 : leaf->value_size();
+  buf.resize(leaf->key_size() + vsize);
+  if (vsize != 0) {
+    std::memcpy(buf.data() + leaf->key_size(), leaf->value().data(), vsize);
+  }
   const auto prefix = leaf->node.getPrefix();
-  assert(leaf->key_size >= prefix.size);
-  auto pos = buf.data() + leaf->key_size - prefix.size;
-  std::memcpy(pos, prefix.data, prefix.size + vsize);
+  assert(leaf->key_size() >= prefix.size);
+  auto pos = buf.data() + leaf->key_size() - prefix.size;
+  std::memcpy(pos, prefix.data, prefix.size);
   auto current = leaf->node.parent;
   // auto index = leaf->node.index;
   // auto current = leaf->node.parent;
@@ -827,7 +868,7 @@ Fact::Ref Tree::get(
   return Fact::Ref{
     leaf->id,
     Allocator::leafPid(leaf),
-    Fact::Clause{buf.data(), leaf->key_size, vsize}};
+    Fact::Clause{buf.data(), leaf->key_size(), vsize}};
 }
 
 namespace {
@@ -1092,39 +1133,40 @@ Tree::Node::Insert Tree::Node256::insert(
   }
 }
 
-void Tree::Node::copyPrefix(Allocator& allocator, Prefix pfx, uint32_t real_size) {
-  assert(real_size < 0x80000000Ul);
-  assert(pfx.size <= real_size);
-  prefix_size_ = pfx.size << 1;
-  unsigned char *buf;
-  if (real_size <= pfx_avail() - 1) {
-    buf = reinterpret_cast<unsigned char *>(&prefix_size_) + 1;
+void Tree::Node0::setClause(Allocator& allocator, Fact::Clause clause) {
+  if (clause.key_size <= node.pfx_avail() && clause.value_size == 0) {
+    node.short_prefix_size = static_cast<unsigned char>(clause.key_size << 1);
+    std::memcpy(node.prefix_bytes, clause.data, clause.key_size);
   } else {
-    prefix_size_ |= 1;
-    buf = allocator.allocate(real_size);
-    prefix_ = buf;
+    node.prefix_size = (clause.key_size << 1) | 1;
+    auto buf = allocator.allocate(clause.value_size == 0 ? clause.key_size : clause.size() + 4);
+    node.prefix = buf;
+    std::memcpy(buf, clause.data, clause.key_size);
+    if (clause.value_size != 0) {
+      folly::storeUnaligned<uint32_t>(buf + clause.key_size, clause.value_size);
+      std::memcpy(buf + clause.key_size + 4, clause.data + clause.key_size, clause.value_size);
+    }
   }
-  std::memcpy(buf, pfx.data, real_size);
 }
 
 void Tree::Node::shiftPrefix(const unsigned char *start, Type type) {
-  const auto prefix = getPrefix();
+  const auto pfx = getPrefix();
   const auto size =
-    static_cast<uint32_t>((prefix.data + prefix.size) - start);
-  assert(size < prefix.size);
-  assert(start >= prefix.data && start <= prefix.data + prefix.size);
-  if ((prefix_size_ & 1) == 0) {
-    auto p = reinterpret_cast<unsigned char *>(&prefix_size_);
-    *p = static_cast<unsigned char>(size) << 1;
-    ++p;
+    static_cast<uint32_t>((pfx.data + pfx.size) - start);
+  assert(size < pfx.size);
+  assert(start >= pfx.data && start <= pfx.data + pfx.size);
+  if ((short_prefix_size & 1) == 0) {
+    short_prefix_size = static_cast<unsigned char>(size) << 1;
+    auto p = prefix_bytes;
     const auto n = p + pfx_avail() - start;
     for (auto i = 0; i < n; ++i) {
       p[i] = start[i];
     }
+  } else if (!(type == Type::N0 && reinterpret_cast<Node0*>(this)->hasValue())) {
+    setPrefix({start, size});
   } else {
-    const auto real_size = size
-      + (type == Type::N0 ? reinterpret_cast<Node0*>(this)->value_size : 0);
-    setPrefix({start, size}, real_size);
+    prefix_size = (size << 1) | 1;
+    prefix = start;
   }
 }
 
@@ -1152,8 +1194,7 @@ std::pair<const Tree::Node0 * FOLLY_NULLABLE, bool> Tree::insert(
   }
   if (ins.fresh) {
     ins.leaf->id = id;
-    ins.leaf->key_size = clause.key_size;
-    ins.leaf->value_size = clause.value_size;
+    ins.leaf->set_sizes(clause);
     impl->max_key_size = std::max(impl->max_key_size, clause.key_size);
     impl->max_value_size = std::max(impl->max_value_size, clause.value_size);
     ++impl->count;
@@ -1196,9 +1237,12 @@ void Tree::Buffer::leave(const Node *node) {
 }
 
 void Tree::Buffer::copyValue(const Node0 *node) {
-  assert(fits(node->value_size));
-  const auto prefix = node->node.getPrefix();
-  std::memcpy(buf.get() + size, prefix.data + prefix.size, node->value_size);
+  assert(fits(node->value_size()));
+  // const auto prefix = node->node.getPrefix();
+  const auto value = node->value();
+  if (value.size() != 0) {
+    std::memcpy(buf.get() + size, value.data(), value.size());
+  }
 }
 
 Tree::Iterator::Iterator(const Node0 *node, Buffer buffer, size_t prefixlen)
@@ -1212,8 +1256,8 @@ Id Tree::Iterator::id() const {
 
 Fact::Ref Tree::Iterator::get(Demand demand) {
   if (node) {
-    assert(buffer.size == node->key_size);
-    const auto vsize = demand == Demand::KeyOnly ? 0 : node->value_size;
+    assert(buffer.size == node->key_size());
+    const auto vsize = demand == Demand::KeyOnly ? 0 : node->value_size();
     if (vsize != 0) {
       buffer.copyValue(node);
     }
@@ -1222,7 +1266,7 @@ Fact::Ref Tree::Iterator::get(Demand demand) {
       Allocator::leafPid(node),
       Fact::Clause{
         buffer.data(),
-        node->key_size,
+        node->key_size(),
         vsize
       }
     };
@@ -1816,15 +1860,15 @@ void Tree::dump(std::ostream& s) const {
 }
 
 void Tree::Node::stats(ConstPtr node, Stats& s) {
-  if ((node->prefix_size_ & 1) != 0) {
-    s.data_used += (node->prefix_size_ >> 1);
+  if ((node->prefix_size & 1) != 0) {
+    s.data_used += (node->prefix_size >> 1);
   }
   dispatch(node, [&](auto p) { p->stats(s); });
 }
 
 void Tree::Node0::stats(Stats& s) const {
-  if ((node.prefix_size_ & 1) != 0) {
-    s.data_used += value_size;
+  if ((node.prefix_size & 1) != 0) {
+    s.data_used += value_size();
   }
 }
 

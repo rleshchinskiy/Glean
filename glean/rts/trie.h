@@ -61,6 +61,7 @@ public:
     struct Ty {
       size_t count = 0;
       size_t bytes = 0;
+      size_t wasted = 0;
       size_t children = 0;
     };
 

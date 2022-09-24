@@ -27,7 +27,7 @@ struct NodeAllocator : private U {
     Slot *freelink;
     unsigned char bytes[sizeof(T)];
   };
-  struct alignas(T) Header : U {
+  struct Header : U {
     Page *next;
 
     explicit Header(const U& u) : U(u) {}
@@ -39,8 +39,8 @@ struct NodeAllocator : private U {
     (PAGE_SIZE - sizeof(Header)) / sizeof(T);
 
   struct alignas(PAGE_SIZE) Page {
-    Header header;
     Slot slots[CAPACITY];
+    Header header;
 
     explicit Page(const U& u) : header(u) {}
   };

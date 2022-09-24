@@ -546,13 +546,20 @@ struct Tree::Node0 {
 
 struct Tree::Node4 {
   Node node;
-  unsigned char bytes[4];
   Node::Ptr children[4];
 
   static constexpr Node::Type type = Node::Type::N4;
 
   Node4() {
     std::fill(children, children+4, Node::null);
+  }
+
+  unsigned char *bytes() {
+    return node.spare;
+  }
+
+  const unsigned char *bytes() const {
+    return node.spare;
   }
 
   Node::Child at(int index) const;
@@ -933,11 +940,11 @@ Tree::Node::Insert Tree::Node::insert(
     }
     parent = Uplink(Node::ptr(pre), my_index);
     leaf->node.parent = Uplink(Node::ptr(pre), leaf_index);
-    pre->bytes[my_index] = byte;
+    pre->bytes()[my_index] = byte;
     pre->children[my_index] = me;
-    pre->bytes[leaf_index] = *k;
+    pre->bytes()[leaf_index] = *k;
     pre->children[leaf_index] = Node::ptr(leaf);
-    assert(pre->bytes[0] < pre->bytes[1]);
+    assert(pre->bytes()[0] < pre->bytes()[1]);
     me = ptr(pre);
     return Insert::inserted(leaf);
   } else {
@@ -971,31 +978,31 @@ Tree::Node::Insert Tree::Node4::insert(
   ++clause.data;
   --clause.key_size;
   unsigned char i;
-  for (i = 0; i < 4 && byte != bytes[i]; ++i) {}
+  for (i = 0; i < 4 && byte != bytes()[i]; ++i) {}
   if (i < 4 && children[i]) {
     return Node::Insert::cont(&children[i], clause.data);
   } else {
     auto leaf = Node::newNode0(allocator, clause);
     for (i = 0; i < 4 && children[i]; ++i) {}
     if (i < 4) {
-      while (i > 0 && bytes[i-1] > byte) {
-        bytes[i] = bytes[i-1];
+      while (i > 0 && bytes()[i-1] > byte) {
+        bytes()[i] = bytes()[i-1];
         children[i] = children[i-1];
         children[i]->parent.setIndex(i);
         --i;
       }
       leaf->node.parent = Node::Uplink(Node::ptr(this), i);
-      bytes[i] = byte;
+      bytes()[i] = byte;
       children[i] = Node::ptr(leaf);
-      auto b = bytes[0];
+      auto b = bytes()[0];
       for (i = 1; i < 4 && children[i]; ++i) {
-        CHECK_LT(b, bytes[i]);
-        b = bytes[i];
+        assert(b < bytes()[i]);
+        b = bytes()[i];
       }
     } else {
       auto c = Node::cloneAs<Node16>(allocator, node);
-      for (i = 0; i < 4 && bytes[i] < byte; ++i) {
-        c->bytes[i] = bytes[i];
+      for (i = 0; i < 4 && bytes()[i] < byte; ++i) {
+        c->bytes[i] = bytes()[i];
         c->children[i] = children[i];
         c->children[i]->parent = Node::Uplink(Node::ptr(c), i);
       }
@@ -1003,7 +1010,7 @@ Tree::Node::Insert Tree::Node4::insert(
       c->bytes[i] = byte;
       c->children[i] = Node::ptr(leaf);
       while (i<4) {
-        c->bytes[i+1] = bytes[i];
+        c->bytes[i+1] = bytes()[i];
         c->children[i+1] = children[i];
         c->children[i+1]->parent = Node::Uplink(Node::ptr(c), i+1);
         ++i;
@@ -1373,7 +1380,7 @@ Tree::Node::Child Tree::Node0::at(int) const {
 
 Tree::Node::Child Tree::Node4::at(int index) const {
   if (index < 4 && children[index]) {
-    return {children[index], bytes[index]};
+    return {children[index], bytes()[index]};
   } else {
     return {};
   }
@@ -1413,7 +1420,7 @@ unsigned char Tree::Node0::byteAt(int) const {
 
 unsigned char Tree::Node4::byteAt(int index) const {
   assert(index < 4 && children[index]);
-  return bytes[index];
+  return bytes()[index];
 }
 
 unsigned char Tree::Node16::byteAt(int index) const {
@@ -1461,7 +1468,7 @@ Tree::Node::Child Tree::Node0::find(unsigned char) const {
 
 Tree::Node::Child Tree::Node4::find(unsigned char byte) const {
   for (auto i = 0; i < 4 && children[i]; ++i) {
-    if (bytes[i] == byte) {
+    if (bytes()[i] == byte) {
       return {children[i], static_cast<unsigned char>(i)};
     }
   }
@@ -1522,9 +1529,9 @@ Tree::Node::Child Tree::Node0::lower_bound(unsigned char) const {
 
 Tree::Node::Child Tree::Node4::lower_bound(unsigned char byte) const {
   int i;
-  for (i = 0; i < 4 && bytes[i] < byte && children[i]; ++i) {}
+  for (i = 0; i < 4 && bytes()[i] < byte && children[i]; ++i) {}
   if (i < 4) {
-    return {children[i], bytes[i]};
+    return {children[i], bytes()[i]};
   } else {
     return {};
   }
@@ -1643,19 +1650,19 @@ void Tree::Node4::validate() const {
   if (children[0] == Node::null) {
     LOG(ERROR) << "Node4::validate: empty";
   }
-  auto b = bytes[0];
+  auto b = bytes()[0];
   for (auto i = 1; i < 4 && children[i]; ++i) {
-    if (bytes[i] < b) {
+    if (bytes()[i] < b) {
       LOG(ERROR) << "Node4::validate: not sorted";
       break;
-    } else if (bytes[i] == b) {
+    } else if (bytes()[i] == b) {
       LOG(ERROR) << "Node4::validate: duplicate";
       break;
     }
-    b = bytes[i];
+    b = bytes()[i];
   }
   for (auto i = 0; i < 4 && children[i]; ++i) {
-    Node::validate(children[i], Node::ptr(this), i, bytes[i]);
+    Node::validate(children[i], Node::ptr(this), i, bytes()[i]);
   }
 }
 
@@ -1742,7 +1749,7 @@ void Tree::Node0::keys(std::string& buf, std::vector<std::string>& v) const {
 
 void Tree::Node4::keys(std::string& buf, std::vector<std::string>& v) const {
   for (auto i = 0; i < 4 && children[i]; ++i) {
-    buf.push_back(bytes[i]);
+    buf.push_back(bytes()[i]);
     Node::keys(children[i], buf, v);
     buf.pop_back();
   }
@@ -1817,7 +1824,7 @@ void Tree::Node0::dump(std::ostream& s, int indent, const std::string& prefix) c
 void Tree::Node4::dump(std::ostream& s, int indent, const std::string& prefix) const {
   s << spaces(indent) << "N4 " << prefix << std::endl;
   for (auto i = 0; i < 4 && children[i]; ++i) {
-    s << spaces(indent+2) << binary::hex(bytes[i]) << std::endl;
+    s << spaces(indent+2) << binary::hex(bytes()[i]) << std::endl;
     Node::dump(children[i], s, indent+4);
   }
 }

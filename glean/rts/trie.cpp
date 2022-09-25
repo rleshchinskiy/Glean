@@ -880,24 +880,41 @@ Fact::Ref Tree::get(
 
 namespace {
 
-std::pair<std::string::const_iterator, folly::ByteRange::iterator>
-mismatch(const std::string& s, folly::ByteRange t) {
-  const auto sp = reinterpret_cast<const unsigned char *>(s.data());
-  const auto [p,k] = std::mismatch(sp, sp + s.size(), t.begin(), t.end());
-  return {s.begin() + (p-sp), k};
+uint32_t mismatch(
+    const unsigned char *p,
+    const unsigned char *q,
+    uint32_t size) {
+  uint32_t i = 0;
+  while ((size & 7) != 0) {
+    if (*p++ != *q++) {
+      return i;
+    }
+    ++i;
+    --size;
+  }
+
+  while (size != 0) {
+    const auto x = folly::loadUnaligned<uint64_t>(p);
+    const auto y = folly::loadUnaligned<uint64_t>(q);
+    const auto z = x^y;
+    if (z != 0) {
+        return i + __builtin_ctzl(z) / 8;
+    }
+    p += 8;
+    q += 8;
+    i += 8;
+    size -= 8;
+  }
+  return  i;
 }
 
-std::pair<std::string::iterator, folly::ByteRange::iterator>
-mismatch(std::string& s, folly::ByteRange t) {
-  const auto sp = reinterpret_cast<unsigned char *>(s.data());
-  const auto [p,k] = std::mismatch(sp, sp + s.size(), t.begin(), t.end());
-  return {s.begin() + (p-sp), k};
-}
-
-std::pair<folly::ByteRange::iterator, folly::ByteRange::iterator>
-mismatch(folly::ByteRange s, folly::ByteRange t) {
-  const auto [p,k] = std::mismatch(s.begin(), s.end(), t.begin(), t.end());
-  return {p, k};
+FOLLY_ALWAYS_INLINE
+uint32_t mismatch(
+    const unsigned char *p,
+    uint32_t m,
+    const unsigned char *q,
+    uint32_t n) {
+  return mismatch(p, q, std::min(m,n));
 }
 
 }
@@ -907,31 +924,36 @@ Tree::Node::Insert Tree::Node::insert(
     Ptr& me,
     Fact::Clause clause) {
   const auto prefix = getPrefix();
+  const auto m =
+    mismatch(prefix.data, prefix.size, clause.data, clause.key_size);
+  /*
   const auto [p,k] = mismatch(
     folly::ByteRange{prefix.data, prefix.size},
     clause.key());
-  if (p < prefix.data + prefix.size) {
-    if (k == clause.key().end()) {
+  */
+  if (m < prefix.size) {
+    if (m == clause.key_size) {
       error("inserted key is prefix of existing key");
     }
     auto pre = allocator.alloc<Node4>();
-    pre->node.setPrefix({prefix.data, static_cast<uint32_t>(p - prefix.data)});
+    pre->node.setPrefix({prefix.data, m});
     // pre->node.prefix = prefix;
     // pre->node.prefix_size = p - prefix;
     pre->node.parent = parent;
-    const auto byte = static_cast<unsigned char>(*p);
+    const auto prefix_byte = prefix.data[m];
+    const auto key_byte = clause.data[m];
     /*
     prefix_size = (prefix + prefix_size) - (p+1);
     prefix = p+1;
     */
-    shiftPrefix(p+1, me.type());
-    assert(clause.key_size >= (k+1) - clause.data);
-    clause.key_size -= (k+1) - clause.data;
-    clause.data = k+1;
+    shiftPrefix(prefix.data + m + 1, me.type());
+    assert(clause.key_size >= m+1);
+    clause.key_size -= m+1;
+    clause.data += m+1;
     auto leaf = newNode0(allocator, clause);
     unsigned char my_index;
     unsigned char leaf_index;
-    if (byte < *k) {
+    if (prefix_byte < key_byte) {
       my_index =  0;
       leaf_index = 1;
     } else {
@@ -940,18 +962,26 @@ Tree::Node::Insert Tree::Node::insert(
     }
     parent = Uplink(Node::ptr(pre), my_index);
     leaf->node.parent = Uplink(Node::ptr(pre), leaf_index);
-    pre->bytes()[my_index] = byte;
+    pre->bytes()[my_index] = prefix_byte;
     pre->children[my_index] = me;
-    pre->bytes()[leaf_index] = *k;
+    pre->bytes()[leaf_index] = key_byte;
     pre->children[leaf_index] = Node::ptr(leaf);
     assert(pre->bytes()[0] < pre->bytes()[1]);
     me = ptr(pre);
     return Insert::inserted(leaf);
   } else {
-    assert(clause.key_size >= k - clause.data);
-    clause.key_size -= k - clause.data;
-    clause.data = k;
-    return dispatch(me, [&,k=k](auto node) {
+    assert(clause.key_size >= m);
+    if (me.type() == Type::N0 && clause.key_size != m) {
+      LOG(ERROR) << "OOPS "
+        << " keysize=" << clause.key_size
+        << " pfxsize=" << prefix.size
+        << " m=" << m;
+      LOG(ERROR) << "key=" << binary::hex(clause.key());
+      LOG(ERROR) << "pfx=" << binary::hex(folly::ByteRange(prefix.data, prefix.size));
+    }
+    clause.key_size -= m;
+    clause.data += m;
+    return dispatch(me, [&](auto node) {
       return node->insert(allocator, me, clause);
     });
   }
@@ -1504,15 +1534,16 @@ Tree::Iterator Tree::find(folly::ByteRange key) const {
   Node::ConstPtr node = impl->root;
   while (node.type() != Node::Type::N0) {
     const auto prefix = node->getPrefix();
-    const auto [p,k] = mismatch(folly::ByteRange{prefix.data, prefix.size}, {keypos, key.end()});
-    if (p != prefix.data + prefix.size || k == key.end()) {
+    // const auto [p,k] = mismatch(folly::ByteRange{prefix.data, prefix.size}, {keypos, key.end()});
+    const auto m = mismatch(prefix.data, prefix.size, keypos, static_cast<uint32_t>(key.end() - keypos));
+    if (m != prefix.size || keypos + m == key.end()) {
       return {};
     } else {
-      const auto child = Node::dispatch(node, [b=*k](auto p) { return p->find(b); });
+      const auto child = Node::dispatch(node, [b=keypos[m]](auto p) { return p->find(b); });
       if (child.node == Node::null) {
         return {};
       }
-      keypos = k+1;
+      keypos += m+1;
       node = child.node;
     }
   }
@@ -1574,26 +1605,27 @@ Tree::Iterator Tree::lower_bound(folly::ByteRange key) const {
   auto keypos = key.begin();
   while (true) {
     const auto prefix = node->getPrefix();
-    const auto [p,k] = mismatch(folly::ByteRange{prefix.data, prefix.size}, {keypos, key.end()});
-    if (k == key.end() || (p != prefix.data + prefix.size && *k < *p)) {
+    // const auto [p,k] = mismatch(folly::ByteRange{prefix.data, prefix.size}, {keypos, key.end()});
+    const auto m = mismatch(prefix.data, prefix.size, keypos, static_cast<uint32_t>(key.end() - keypos));
+    if (keypos + m == key.end() || (m != prefix.size && keypos[m] < prefix.data[m])) {
       return Cursor(Cursor::Enter, node, impl->buffer({key.begin(), keypos})).leftmost();
-    } else if (p == prefix.data + prefix.size) {
-      const auto child = Node::dispatch(node, [k=k](auto p) {
-        return p->lower_bound(*k);
+    } else if (m == prefix.size) {
+      const auto child = Node::dispatch(node, [b=keypos[m]](auto p) {
+        return p->lower_bound(b);
       });
       if (child.node) {
-        if (*k == child.byte) {
+        if (keypos[m] == child.byte) {
           node = child.node;
-          keypos = k+1;
+          keypos += m+1;
           // loop
         } else {
           // *k < child.byte
-          return Cursor(node, impl->buffer({key.begin(), k}))
+          return Cursor(node, impl->buffer({key.begin(), keypos+m}))
             .down(child.byte, child.node)
             .leftmost();
         }
       } else {
-        return Cursor(node, impl->buffer({key.begin(), k})).next();
+        return Cursor(node, impl->buffer({key.begin(), keypos+m})).next();
       }
     } else { // *k > *p
         return Cursor(Cursor::Enter, node, impl->buffer({key.begin(), keypos})).next();
@@ -1605,8 +1637,14 @@ Tree::Iterator Tree::lower_bound(
     folly::ByteRange key, size_t prefix_size) const {
   auto it = lower_bound(key);
   if (!it.done()) {
-    const auto [p,k] = mismatch(it.getKey(), key);
-    if (k - key.begin() < prefix_size) {
+    // const auto [p,k] = mismatch(it.getKey(), key);
+    const auto it_key = it.getKey();
+    const auto m = mismatch(
+      it_key.begin(),
+      static_cast<uint32_t>(it_key.size()),
+      key.begin(),
+      static_cast<uint32_t>(key.size()));
+    if (m < prefix_size) {
       it = {};
     } else {
       it.prefixlen = prefix_size;

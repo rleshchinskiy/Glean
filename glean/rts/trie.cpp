@@ -367,7 +367,7 @@ struct Tree::Node {
     setPrefix(pfx, pfx.size);
   }
 
-  void shiftPrefix(const unsigned char *start, Type type); /* {
+  void shiftPrefix(uint32_t offset, Type type); /* {
     const auto prefix = getPrefix();
     const auto size =
       static_cast<uint32_t>((prefix.data + prefix.size) - (start+1));
@@ -926,27 +926,16 @@ Tree::Node::Insert Tree::Node::insert(
   const auto prefix = getPrefix();
   const auto m =
     mismatch(prefix.data, prefix.size, clause.data, clause.key_size);
-  /*
-  const auto [p,k] = mismatch(
-    folly::ByteRange{prefix.data, prefix.size},
-    clause.key());
-  */
   if (m < prefix.size) {
     if (m == clause.key_size) {
       error("inserted key is prefix of existing key");
     }
     auto pre = allocator.alloc<Node4>();
     pre->node.setPrefix({prefix.data, m});
-    // pre->node.prefix = prefix;
-    // pre->node.prefix_size = p - prefix;
     pre->node.parent = parent;
     const auto prefix_byte = prefix.data[m];
     const auto key_byte = clause.data[m];
-    /*
-    prefix_size = (prefix + prefix_size) - (p+1);
-    prefix = p+1;
-    */
-    shiftPrefix(prefix.data + m + 1, me.type());
+    shiftPrefix(m + 1, me.type());
     assert(clause.key_size >= m+1);
     clause.key_size -= m+1;
     clause.data += m+1;
@@ -971,14 +960,6 @@ Tree::Node::Insert Tree::Node::insert(
     return Insert::inserted(leaf);
   } else {
     assert(clause.key_size >= m);
-    if (me.type() == Type::N0 && clause.key_size != m) {
-      LOG(ERROR) << "OOPS "
-        << " keysize=" << clause.key_size
-        << " pfxsize=" << prefix.size
-        << " m=" << m;
-      LOG(ERROR) << "key=" << binary::hex(clause.key());
-      LOG(ERROR) << "pfx=" << binary::hex(folly::ByteRange(prefix.data, prefix.size));
-    }
     clause.key_size -= m;
     clause.data += m;
     return dispatch(me, [&](auto node) {
@@ -1186,24 +1167,30 @@ void Tree::Node0::setClause(Allocator& allocator, Fact::Clause clause) {
   }
 }
 
-void Tree::Node::shiftPrefix(const unsigned char *start, Type type) {
-  const auto pfx = getPrefix();
-  const auto size =
-    static_cast<uint32_t>((pfx.data + pfx.size) - start);
-  assert(size < pfx.size);
-  assert(start >= pfx.data && start <= pfx.data + pfx.size);
-  if ((short_prefix_size & 1) == 0) {
-    short_prefix_size = static_cast<unsigned char>(size) << 1;
-    auto p = prefix_bytes;
-    const auto n = p + pfx_avail() - start;
-    for (auto i = 0; i < n; ++i) {
-      p[i] = start[i];
-    }
-  } else if (!(type == Type::N0 && reinterpret_cast<Node0*>(this)->hasValue())) {
-    setPrefix({start, size});
+void Tree::Node::shiftPrefix(uint32_t offset, Type type) {
+  const auto s = short_prefix_size;
+  if ((s&1) == 0) {
+    assert(offset <= (s >> 1));
+    unsigned __int128 x;
+    std::memcpy(&x, &short_prefix_size, 12);
+    x >>= offset*8;
+    std::memcpy(&short_prefix_size, &x, 12);
+    short_prefix_size = s - (static_cast<unsigned char>(offset) << 1);
   } else {
-    prefix_size = (size << 1) | 1;
-    prefix = start;
+    const auto old_size = prefix_size >> 1;
+    assert(offset <= old_size);
+    const auto new_size = old_size - offset;
+    if (new_size <= pfx_avail() && !(type == Type::N0 && reinterpret_cast<Node0*>(this)->hasValue())) {
+      assert(old_size >= 12);
+      unsigned __int128 x;
+      std::memcpy(&x, prefix + old_size - 12, 12);
+      x >>= (11 - new_size)*8;
+      std::memcpy(&short_prefix_size, &x, 12);
+      short_prefix_size = static_cast<unsigned char>(new_size) << 1;
+    } else {
+      prefix_size = (new_size << 1) | 1;
+      prefix += offset;
+    }
   }
 }
 

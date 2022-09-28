@@ -14,6 +14,28 @@ namespace facebook {
 namespace glean {
 namespace rts {
 
+FactBlock FactBlock::create(FactIterator& iter) {
+  FactBlock block;
+  auto fact = iter.get();
+  if (!fact) {
+    block.starting_id = Id::fromWord(1024);
+    return block;
+  }
+
+  block.starting_id = fact.id;
+  auto expected = fact.id;
+
+  while (fact && fact.id == expected) {
+    block.facts.push_back(Fact::create(fact));
+    ++expected;
+    iter.next();
+    fact = iter.get();
+  }
+
+  return block;
+}
+
+
 #if 0
 struct FactSet::Index {
   /// Type of index maps
@@ -508,6 +530,18 @@ FactSet FactSet::cloneContiguous(Lookup& lookup) {
     fact = iter->get();
   }
 
+  return facts;
+}
+
+FactSet FactSet::fromBlock(const FactBlock& block) {
+  FactSet facts(block.starting_id);
+  auto expected = block.starting_id;
+  for (const auto& fact : block.facts) {
+    assert(fact->id() == expected);
+    const auto k = facts.define(fact->type(), fact->clause());
+    assert(k == expected);
+    ++expected;
+  }
   return facts;
 }
 

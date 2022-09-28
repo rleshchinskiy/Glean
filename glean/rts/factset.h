@@ -106,6 +106,13 @@ template<typename T, typename By> using FastSetBy =
     folly::transparent<HashBy<By>>,
     folly::transparent<EqualBy<By>>>;
 
+struct FactBlock {
+  Id starting_id;
+  std::vector<Fact::unique_ptr> facts;
+
+  static FactBlock create(FactIterator& iterator);
+};
+
 /**
  * A set of facts which can be looked up by id or by key.
  *
@@ -362,6 +369,7 @@ public:
   bool appendable(const FactSet& other) const;
 
   static FactSet cloneContiguous(Lookup& lookup);
+  static FactSet fromBlock(const FactBlock& block);
 
   bool sanityCheck() const;
 

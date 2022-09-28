@@ -25,6 +25,12 @@ module Glean.RTS.Foreign.FactSet
   , RandomParams(..)
   , random
   , copyWithRandomRepeats
+
+  , copyFactBlock
+  , fromFactBlock
+
+  , containsById
+  , containsByKey
   ) where
 
 import Control.Exception
@@ -190,6 +196,35 @@ copyWithRandomRepeats seed repeatFreq facts =
     (coerce repeatFreq)
     facts_ptr
 
+newtype FactBlock = FactBlock (ForeignPtr FactBlock)
+
+instance Object FactBlock where
+  wrap = FactBlock
+  unwrap (FactBlock p) = p
+  destroy = glean_factblock_free
+
+copyFactBlock :: CanLookup l => l -> IO FactBlock
+copyFactBlock l = withLookup  l $ \look ->
+  construct $ invoke $ glean_factblock_copy look
+
+fromFactBlock :: FactBlock -> IO FactSet
+fromFactBlock b = with b $ \p ->
+  construct $ invoke $ glean_factset_from_factblock p
+
+containsById :: CanLookup l => l -> FactBlock -> IO Bool
+containsById l block =
+  withLookup l $ \look ->
+  with block $ \ptr -> do
+    r <- invoke $ glean_lookup_contains_by_id look ptr
+    return $ r /= 0
+
+containsByKey ::  CanLookup l => l -> FactBlock -> IO Bool
+containsByKey l block =
+  withLookup l $ \look ->
+  with block $ \ptr -> do
+    r <- invoke $ glean_lookup_contains_by_key look ptr
+    return $ r /= 0
+
 foreign import ccall unsafe glean_factset_new
   :: Fid -> Ptr (Ptr FactSet) -> IO CString
 foreign import ccall unsafe "&glean_factset_free" glean_factset_free
@@ -273,4 +308,31 @@ foreign import ccall safe glean_factset_copy_with_random_repeats
   -> CDouble
   -> Ptr FactSet
   -> Ptr (Ptr FactSet)
+  -> IO CString
+
+foreign import ccall safe glean_factblock_copy
+  :: Ptr Lookup
+  -> Ptr (Ptr FactBlock)
+  -> IO CString
+
+foreign import ccall unsafe "&glean_factblock_free" glean_factblock_free
+  :: FunPtr (Ptr FactBlock -> IO ())
+
+foreign import ccall safe glean_factset_from_factblock
+  :: Ptr FactBlock
+  -> Ptr (Ptr FactSet)
+  -> IO CString
+
+
+foreign import ccall safe glean_lookup_contains_by_id
+  :: Ptr Lookup
+  -> Ptr FactBlock
+  -> Ptr CBool
+  -> IO CString
+
+
+foreign import ccall safe glean_lookup_contains_by_key
+  :: Ptr Lookup
+  -> Ptr FactBlock
+  -> Ptr CBool
   -> IO CString

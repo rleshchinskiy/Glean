@@ -48,21 +48,23 @@ main =
   withEventBaseDataplane $ \evb ->
   withConfigProvider cfg $ \(cfgAPI :: ConfigAPI) ->
   withDatabases evb configOptions cfgAPI $ \env -> do
-    facts1 <- readDatabase env configRepo $ const $ bench "read"
-    facts2 <- bench "copy" facts1
+    facts1 <- readDatabase env configRepo $ \_ -> bench "read" . FactSet.cloneContiguous
+    facts2 <- bench "copy" $ FactSet.cloneContiguous facts1
+    block <- bench3 "block" $ FactSet.copyFactBlock facts2
+    facts3 <- bench "from" $ FactSet.fromFactBlock block
     readDatabase env configRepo $ \_ db ->
-      bench2 "byId (db)" $ Lookup.containsById db facts1
-    bench2 "byId (fs)" $ Lookup.containsById facts2 facts1
+      bench2 "byId (db)" $ FactSet.containsById db block
+    bench2 "byId (fs)" $ FactSet.containsById facts3 block
     readDatabase env configRepo $ \_ db ->
-      bench2 "byKey (db)" $ Lookup.containsByKey db facts1
-    bench2 "byKey (fs)" $ Lookup.containsByKey facts2 facts1
-    stats <- FactSet.predicateStats facts2
+      bench2 "byKey (db)" $ FactSet.containsByKey db block
+    bench2 "byKey (fs)" $ FactSet.containsByKey facts3 block
+    stats <- FactSet.predicateStats facts3
     readDatabase env configRepo $ \_ db ->
       bench2 "seek (db)" $ True <$ forM_ stats (Lookup.seekCount db . fst)
-    bench2 "seek (fs)" $ True <$ forM_ stats (Lookup.seekCount facts2 . fst)
+    bench2 "seek (fs)" $ True <$ forM_ stats (Lookup.seekCount facts3 . fst)
   where
-    bench tag look = do
-      (time, allocs, facts) <- timeIt $ FactSet.cloneContiguous look
+    bench tag action = do
+      (time, allocs, facts) <- timeIt action
       count <- FactSet.factCount facts
       mem <- FactSet.allocatedMemory facts
       factmem <- FactSet.factMemory facts
@@ -81,3 +83,9 @@ main =
       (time, _, res) <- timeIt action
       when (not res) $ die $ tag ++ " failed"
       putStrLn $ unwords [tag, showTime time]
+
+    bench3 :: String -> IO a -> IO a
+    bench3 tag action = do
+      (time, _, res) <- timeIt action
+      putStrLn $ unwords [tag, showTime time]
+      return res

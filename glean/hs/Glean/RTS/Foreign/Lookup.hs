@@ -17,8 +17,6 @@ module Glean.RTS.Foreign.Lookup
   , Limits(..)
   , serialize
   , withSnapshot
-  , containsById
-  , containsByKey
   , seekCount
 ) where
 
@@ -124,19 +122,6 @@ withSnapshot base boundary f =
     glean_lookup_free
     (\p -> f (Lookup p (lookupName base)))
 
-containsById :: (CanLookup a, CanLookup b) => a -> b -> IO Bool
-containsById big small =
-  withLookup big $ \big_ptr ->
-  withLookup small $ \small_ptr -> do
-    r <- invoke $ glean_lookup_contains_by_id big_ptr small_ptr
-    return $ r /= 0
-
-containsByKey :: (CanLookup a, CanLookup b) => a -> b -> IO Bool
-containsByKey big small =
-  withLookup big $ \big_ptr ->
-  withLookup small $ \small_ptr -> do
-    r <- invoke $ glean_lookup_contains_by_key big_ptr small_ptr
-    return $ r /= 0
 
 seekCount :: CanLookup a => a -> Pid -> IO Int
 seekCount look (Pid pid) =
@@ -181,18 +166,6 @@ foreign import ccall safe glean_lookup_serialize
   -> Ptr CSize
   -> IO CString
 
-foreign import ccall safe glean_lookup_contains_by_id
-  :: Ptr Lookup
-  -> Ptr Lookup
-  -> Ptr CBool
-  -> IO CString
-
-
-foreign import ccall safe glean_lookup_contains_by_key
-  :: Ptr Lookup
-  -> Ptr Lookup
-  -> Ptr CBool
-  -> IO CString
 
 foreign import ccall safe glean_lookup_seek_count
   :: Ptr Lookup

@@ -389,15 +389,14 @@ const char *glean_lookup_serialize(
 }
 
 const char *glean_lookup_contains_by_id(
-    Lookup *big,
-    Lookup *small,
+    Lookup *lookup,
+    FactBlock *block,
     bool *result) {
   return ffi::wrap([=] {
     *result = true;
-    auto iter = small->enumerate();
-    while (const auto ref = iter->get()) {
-      const auto found = big->factById(ref.id, [&](auto type, auto clause) {
-        if (type != ref.type || clause.key() != ref.clause.key()) {
+    for (const auto& fact : block->facts) {
+      const auto found = lookup->factById(fact->id(), [&](auto type, auto clause) {
+        if (type != fact->type () || clause.key() != fact->key()) {
           *result = false;
         }
       });
@@ -407,25 +406,22 @@ const char *glean_lookup_contains_by_id(
       if (!*result) {
         return;
       }
-      iter->next();
     }
     *result = true;
   });
 }
 
 const char *glean_lookup_contains_by_key(
-    Lookup *big,
-    Lookup *small,
+    Lookup *lookup,
+    FactBlock *block,
     bool *result) {
   return ffi::wrap([=] {
-    auto iter = small->enumerate();
-    while (const auto ref = iter->get()) {
-      const auto id = big->idByKey(ref.type, ref.key());
-      if (id != ref.id) {
+    for (const auto& fact : block->facts) {
+      const auto id = lookup->idByKey(fact->type(), fact->key());
+      if (id != fact->id()) {
         *result = false;
         return;
       }
-      iter->next();
     }
     *result = true;
   });
@@ -537,6 +533,16 @@ const char *glean_subst_intervals(
     std::transform(res.begin(), res.end(), fres.get(), [](auto id) { return id.toThrift(); });
     fres.release_to(outs, outs_size);
   });
+}
+
+const char *glean_factblock_copy(Lookup *lookup, FactBlock **block) {
+  return ffi::wrap([=] {
+    *block = new FactBlock(FactBlock::create(*(lookup->enumerate())));
+  });
+}
+
+void glean_factblock_free(FactBlock *block) {
+  ffi::free_(block);
 }
 
 const char *glean_factset_new(
@@ -656,6 +662,14 @@ const char *glean_factset_clone_contiguous(
     FactSet **facts) {
   return ffi::wrap([=] {
     *facts = new FactSet(FactSet::cloneContiguous(*lookup));
+  });
+}
+
+const char *glean_factset_from_factblock(
+    FactBlock *block,
+    FactSet **facts) {
+  return ffi::wrap([=] {
+    *facts = new FactSet(FactSet::fromBlock(*block));
   });
 }
 

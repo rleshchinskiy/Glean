@@ -52,6 +52,7 @@ typedef struct DefineOwnership DefineOwnership;
 typedef struct ComputedOwnership ComputedOwnership;
 typedef struct Slice Slice;
 typedef struct Sliced Sliced;
+typedef struct FactBlock FactBlock;
 
 #ifdef __cplusplus
 }
@@ -250,14 +251,14 @@ const char *glean_lookup_serialize(
 );
 
 const char *glean_lookup_contains_by_id(
-  Lookup *big,
-  Lookup *small,
+  Lookup *lookup,
+  FactBlock *block,
   bool *result
 );
 
 const char *glean_lookup_contains_by_key(
-  Lookup *big,
-  Lookup *small,
+  Lookup *lookup,
+  FactBlock *block,
   bool *result
 );
 
@@ -315,6 +316,15 @@ const char *glean_subst_intervals(
 );
 
 
+const char *glean_factblock_copy(
+  Lookup *lookup,
+  FactBlock **block
+);
+
+void glean_factblock_free(
+  FactBlock *block
+);
+
 const char *glean_factset_new(
   int64_t first_id,
   FactSet **facts
@@ -370,6 +380,11 @@ const char *glean_factset_append(
 
 const char *glean_factset_clone_contiguous(
   Lookup *lookup,
+  FactSet **facts
+);
+
+const char *glean_factset_from_factblock(
+  FactBlock *block,
   FactSet **facts
 );
 

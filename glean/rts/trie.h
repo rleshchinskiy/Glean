@@ -143,12 +143,12 @@ public:
   */
 
   struct Iterator final : FactIterator {
-    const Node0 * FOLLY_NULLABLE node = nullptr;
+    Node0 * FOLLY_NULLABLE node = nullptr;
     Buffer buffer;
     size_t prefixlen = 0;
 
     Iterator() = default;
-    Iterator(const Node0 *node, Buffer buffer, size_t prefixlen = 0);
+    Iterator(Node0 *node, Buffer buffer, size_t prefixlen = 0);
 
     Id id() const;
 

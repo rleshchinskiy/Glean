@@ -346,6 +346,24 @@ struct Tree::Node {
     };
   };
 
+  static constexpr size_t TAG_BITS = 2;
+
+  enum class Tag : unsigned char {
+    Short = 1,
+    Sorted = 2
+  };
+
+  [[nodiscard]] constexpr bool tagged(Tag tag) const {
+    return (short_prefix_size & static_cast<unsigned char>(tag));
+  }
+
+  void tag(Tag tag) {
+    short_prefix_size |= static_cast<unsigned char>(tag);
+  }
+
+  void untag(Tag tag) {
+    short_prefix_size &= ~static_cast<unsigned char>(tag);
+  }
 
   static constexpr size_t pfx_avail() {
     return sizeof(prefix_bytes);
@@ -355,10 +373,10 @@ struct Tree::Node {
     assert(real_size < 0x80000000Ul);
     assert(pfx.size <= real_size);
     if (real_size <= sizeof(prefix_bytes)) {
-      short_prefix_size = pfx.size << 1;
+      short_prefix_size = pfx.size << TAG_BITS;
       std::memcpy(prefix_bytes, pfx.data, real_size);
     } else {
-      prefix_size = (pfx.size << 1) | 1;
+      prefix_size = (pfx.size << TAG_BITS) | 1;
       prefix = pfx.data;
     }
   }
@@ -374,7 +392,7 @@ struct Tree::Node {
     assert(start >= prefix.data && start < prefix.data + prefix.size);
     if ((prefix_size_ & 1) == 0) {
       auto p = reinterpret_cast<unsigned char *>(&prefix_size_);
-      *p = static_cast<unsigned char>(size) >> 1;
+      *p = static_cast<unsigned char>(size) >> TAG_BITS;
       ++p;
       for (auto i = 0; i < size; ++i) {
         p[i] = start[i];
@@ -387,12 +405,21 @@ struct Tree::Node {
   } */
 
   Prefix getPrefix() const {
+    /*
     if ((short_prefix_size & 1) == 0) {
-      return Prefix{prefix_bytes, uint32_t(short_prefix_size) >> 1};
+      return Prefix{prefix_bytes, uint32_t(short_prefix_size) >> TAG_BITS};
     } else {
-      return Prefix{prefix, prefix_size >> 1};
+      return Prefix{prefix, prefix_size >> TAG_BITS};
     }
+    */
+   if ((prefix_size & 1) == 0) {
+    return Prefix{prefix_bytes, (prefix_size >> TAG_BITS) & (0xff >> TAG_BITS)};
+   } else {
+    return Prefix{prefix, prefix_size >> TAG_BITS};
+   }
   }
+
+  unsigned char *prependPrefix(unsigned char *p, unsigned char *first) const;
 
   // explicit Node(Type ty) : type(ty) {}
 
@@ -407,7 +434,7 @@ struct Tree::Node {
 
   struct Child {
     // const Node * FOLLY_NULLABLE node = nullptr;
-    ConstPtr node;
+    Ptr node;
     unsigned char byte;
   };
 
@@ -440,6 +467,7 @@ struct Tree::Node {
     }
 
     static Insert cont(Ptr *node, const unsigned char *keypos) {
+      // __builtin_prefetch(&node->pointer()->prefix_size);
       Insert result;
       result.node = node;
       result.keypos = keypos;
@@ -498,7 +526,7 @@ struct Tree::Node0 {
     if (!hasValue()) {
       return folly::ByteRange(node.prefix_bytes, size_t(0));
     } else {
-      const auto p = node.prefix + (node.prefix_size >> 1);
+      const auto p = node.prefix + (node.prefix_size >> Tree::Node::TAG_BITS);
       return folly::ByteRange(p+4, folly::loadUnaligned<uint32_t>(p));
     }
   }
@@ -507,7 +535,7 @@ struct Tree::Node0 {
     if (!hasValue()) {
       return 0;
     } else {
-      const auto p = node.prefix + (node.prefix_size >> 1);
+      const auto p = node.prefix + (node.prefix_size >> Tree::Node::TAG_BITS);
       return folly::loadUnaligned<uint32_t>(p);
     }
   }
@@ -535,6 +563,8 @@ struct Tree::Node0 {
     Node::Ptr& me,
     Fact::Clause Clause);
 
+  void sort() {}
+
   void validate() const;
   void keys(std::string& buf, std::vector<std::string>& v) const;
   void keys(int idx, std::string& buf, std::vector<std::string>& v) const;
@@ -550,10 +580,6 @@ struct Tree::Node4 {
 
   static constexpr Node::Type type = Node::Type::N4;
 
-  Node4() {
-    std::fill(children, children+4, Node::null);
-  }
-
   unsigned char *bytes() {
     return node.spare;
   }
@@ -561,6 +587,7 @@ struct Tree::Node4 {
   const unsigned char *bytes() const {
     return node.spare;
   }
+
 
   Node::Child at(int index) const;
   Node::Child find(unsigned char byte) const;
@@ -571,6 +598,14 @@ struct Tree::Node4 {
     Allocator& allocator,
     Node::Ptr& me,
     Fact::Clause Clause);
+
+  void doSort();
+  void sort() {
+    if (!node.tagged(Tree::Node::Tag::Sorted)) {
+      doSort();
+      node.tag(Tree::Node::Tag::Sorted);
+    }
+  }
 
   void validate() const;
   void keys(std::string& buf, std::vector<std::string>& v) const;
@@ -588,10 +623,6 @@ struct Tree::Node16 {
 
   static constexpr Node::Type type = Node::Type::N16;
 
-  Node16() {
-    std::fill(children, children+16, Node::null);
-  }
-
   Node::Child at(int index) const;
   Node::Child find(unsigned char byte) const;
   Node::Child lower_bound(unsigned char byte) const;
@@ -601,6 +632,14 @@ struct Tree::Node16 {
     Allocator& alocator,
     Node::Ptr& me,
     Fact::Clause Clause);
+
+  void doSort();
+  void sort() {
+    if (!node.tagged(Tree::Node::Tag::Sorted)) {
+      doSort();
+      node.tag(Tree::Node::Tag::Sorted);
+    }
+  }
 
   void validate() const;
   void keys(std::string& buf, std::vector<std::string>& v) const;
@@ -634,6 +673,14 @@ struct Tree::Node48 {
     Node::Ptr& me,
     Fact::Clause Clause);
 
+  void doSort();
+  void sort() {
+    if (!node.tagged(Tree::Node::Tag::Sorted)) {
+      doSort();
+      node.tag(Tree::Node::Tag::Sorted);
+    }
+  }
+
   void validate() const;
   void keys(std::string& buf, std::vector<std::string>& v) const;
   void keys(int idx, std::string& buf, std::vector<std::string>& v) const;
@@ -662,6 +709,8 @@ struct Tree::Node256 {
     Allocator& allocator,
     Node::Ptr& me,
     Fact::Clause Clause);
+
+  void sort() {}
 
   void validate() const;
   void keys(std::string& buf, std::vector<std::string>& v) const;
@@ -772,6 +821,7 @@ Tree::~Tree() noexcept {
 }
 
 template<typename F>
+FOLLY_ALWAYS_INLINE
 auto Tree::Node::dispatch(Ptr p, F&& f) {
   const auto node = p.pointer();
   switch(p.type()) {
@@ -785,6 +835,7 @@ auto Tree::Node::dispatch(Ptr p, F&& f) {
 }
 
 template<typename F>
+FOLLY_ALWAYS_INLINE
 auto Tree::Node::dispatch(ConstPtr p, F&& f) {
   const auto node = p.pointer();
   switch(p.type()) {
@@ -842,6 +893,15 @@ Pid Tree::type(const Tree::Node0 *leaf) {
   return Allocator::leafPid(leaf);
 }
 
+unsigned char *Tree::Node::prependPrefix(unsigned char *p, unsigned char *first) const {
+  const auto pfx = getPrefix();
+  assert(pfx.size <= p - first);
+  p -= pfx.size;
+  std::memcpy(p, pfx.data, pfx.size);
+  return p;
+}
+
+
 Fact::Ref Tree::get(
     const Node0 *leaf,
     FactIterator::Demand demand,
@@ -852,26 +912,21 @@ Fact::Ref Tree::get(
   if (vsize != 0) {
     std::memcpy(buf.data() + leaf->key_size(), leaf->value().data(), vsize);
   }
-  const auto prefix = leaf->node.getPrefix();
-  assert(leaf->key_size() >= prefix.size);
-  auto pos = buf.data() + leaf->key_size() - prefix.size;
-  std::memcpy(pos, prefix.data, prefix.size);
+  const auto first = buf.data();
+  auto pos = buf.data() + leaf->key_size();
+  pos = leaf->node.prependPrefix(pos, first);
   auto current = leaf->node.parent;
-  // auto index = leaf->node.index;
-  // auto current = leaf->node.parent;
   while (!current.null()) {
     const auto index = current.index();
     const auto node = current.ptr();
     const auto prefix = node->getPrefix();
-    assert(prefix.size + 1 <= pos - buf.data());
+    assert(prefix.size + 1 <= pos - first);
     --pos;
     *pos = Node::dispatch(node, [&](const auto *p) { return p->byteAt(index); });
-    pos -= prefix.size;
-    if (prefix.size != 0) {
-      std::memcpy(pos, prefix.data, prefix.size);
-    }
+    pos = node->prependPrefix(pos, first);
     current = node->parent;
   }
+
   return Fact::Ref{
     leaf->id,
     Allocator::leafPid(leaf),
@@ -880,6 +935,7 @@ Fact::Ref Tree::get(
 
 namespace {
 
+FOLLY_NOINLINE
 uint32_t mismatch(
     const unsigned char *p,
     const unsigned char *q,
@@ -908,17 +964,74 @@ uint32_t mismatch(
   return  i;
 }
 
+FOLLY_NOINLINE
+uint32_t mismatch2(
+    const unsigned char *p,
+    const unsigned char *q,
+    uint32_t size) {
+  uint32_t i = 0;
+  while (size >= 32) {
+    const auto x = _mm256_loadu_si256(
+      reinterpret_cast<const __m256i *>(p+i));
+    const auto y = _mm256_loadu_si256(
+      reinterpret_cast<const __m256i *>(q+i));
+    const auto z = _mm256_cmpeq_epi8(x,y);
+    if (!_mm256_testc_si256(z, _mm256_set1_epi64x(0xffffffffffffffffll))) {
+      const auto m = _mm256_movemask_epi8(z);
+      return i + __builtin_ctz(~m);
+    }
+    // p += 16;
+    // q += 16;
+    i += 32;
+    size -= 32;
+  }
+  while (size >= 16) {
+    const auto x = _mm_loadu_si128(
+      reinterpret_cast<const __m128i *>(p+i));
+    const auto y = _mm_loadu_si128(
+      reinterpret_cast<const __m128i *>(q+i));
+    const auto z = _mm_cmpeq_epi8(x,y);
+    if (!_mm_test_all_ones(z)) {
+      const auto m = _mm_movemask_epi8(z);
+      return i + __builtin_ctz(~m);
+    }
+    // p += 16;
+    // q += 16;
+    i += 16;
+    size -= 16;
+  }
+  if (size >= 8) {
+    const auto x = folly::loadUnaligned<uint64_t>(p+i);
+    const auto y = folly::loadUnaligned<uint64_t>(q+i);
+    const auto z = x^y;
+    if (z != 0) {
+        return i + __builtin_ctzl(z) / 8;
+    }
+    // p += 8;
+    // q += 8;
+    i += 8;
+    size -= 8;
+  }
+
+  while (size > 0 && p[i] == q[i]) {
+    ++i;
+    --size;
+  }
+  return i;
+}
+
 FOLLY_ALWAYS_INLINE
 uint32_t mismatch(
     const unsigned char *p,
     uint32_t m,
     const unsigned char *q,
     uint32_t n) {
-  return mismatch(p, q, std::min(m,n));
+  return mismatch2(p, q, std::min(m,n));
 }
 
 }
 
+FOLLY_ALWAYS_INLINE
 Tree::Node::Insert Tree::Node::insert(
     Allocator& allocator,
     Ptr& me,
@@ -955,6 +1068,10 @@ Tree::Node::Insert Tree::Node::insert(
     pre->children[my_index] = me;
     pre->bytes()[leaf_index] = key_byte;
     pre->children[leaf_index] = Node::ptr(leaf);
+    pre->bytes()[2] = 0xff;
+    pre->bytes()[3] = 0xff;
+    pre->children[2] = Node::null;
+    pre->children[3] = Node::null;
     assert(pre->bytes()[0] < pre->bytes()[1]);
     me = ptr(pre);
     return Insert::inserted(leaf);
@@ -966,6 +1083,198 @@ Tree::Node::Insert Tree::Node::insert(
       return node->insert(allocator, me, clause);
     });
   }
+}
+
+namespace {
+
+unsigned char blb4(unsigned char byte, const unsigned char *bytes) {
+  unsigned char i;
+  for (i = 0; i < 4 && bytes[i] < byte; ++i) {}
+  return i;
+}
+
+struct BytePos {
+  int eq;
+  int le;
+};
+
+#if __x86_64__ // use AVX
+
+BytePos bfind(unsigned char byte, uint32_t data) {
+    const auto x = _mm_set1_pi32(data);
+    const auto y = _mm_set1_pi8(byte);
+    const auto z = _mm_subs_pu8(y,x);
+    const auto eq = _m_to_int(_mm_cmpeq_pi8(y,x));
+    const auto n = _m_to_int(z);
+    if (eq != 0) {
+      const auto k = __builtin_ctz(eq)/8;
+      return {k,k};
+    } else {
+      return {4, n == 0 ? 0 : 4 - __builtin_clz(n)/8};
+    }
+}
+
+BytePos bfind16(unsigned char byte, const unsigned char *bytes) {
+    const auto x = _mm_loadu_si128(reinterpret_cast<const __m128i *>(bytes));
+    const auto y = _mm_set1_epi8(byte);
+    const auto eq = _mm_movemask_epi8(_mm_cmpeq_epi8(y,x));
+    if (eq == 0) {
+      const auto z = _mm_subs_epu8(y,x);
+      const auto n = _mm_movemask_epi8(_mm_cmpeq_epi8(z, _mm_setzero_si128()));
+      return { 16, n == 0 ? 16 : __builtin_ctz(n)};
+  } else {
+    const auto k = __builtin_ctz(eq);
+    return {k,k};
+  }
+}
+
+BytePos bfind16x(unsigned char byte, const unsigned char *bytes) {
+  const auto x = _mm_loadu_si128(reinterpret_cast<const __m128i *>(bytes));
+  const auto y = _mm_set1_epi8(byte);
+  const auto e = _mm_movemask_epi8(_mm_cmpeq_epi8(y,x));
+  const auto eq = e != 0 ? __builtin_ctz(e) : 16;
+  const auto z = _mm_subs_epu8(y,x);
+  const auto ones = _mm_set1_epi8(1);
+  const auto d = _mm_sub_epi8(z,ones);
+  const auto d16 = _mm256_cvtepu8_epi16(d);
+  const auto low = _mm256_castsi256_si128(d16);
+  const auto high = _mm_castps_si128(_mm256_extractf128_ps(d16, 1));
+  const auto min_low = _mm_minpos_epu16(low);
+  const auto min_high = _mm_minpos_epu16(high);
+  const auto min_low_32 = _mm_cvtsi128_si32(min_low);
+  const auto min_high_32 = _mm_cvtsi128_si32(min_high);
+  const auto pos = uint16_t(min_low_32) <= uint16_t(min_high_32)
+    ? (min_low_32 >> 16)
+    : (min_high_32 >> 16) + 8;
+  return {eq,pos};
+}
+
+int bfind8y(unsigned char byte, const unsigned char *bytes) {
+  return
+    byte == bytes[0] ? 0 :
+    byte == bytes[1] ? 1 :
+    byte == bytes[2] ? 2 :
+    byte == bytes[3] ? 3 :
+    4;
+}
+
+int bfind16y(unsigned char byte, const unsigned char *bytes) {
+  __builtin_prefetch(bytes);
+  const auto y = _mm_set1_epi8(byte);
+  const auto x = _mm_loadu_si128(reinterpret_cast<const __m128i *>(bytes));
+  const auto eq = _mm_movemask_epi8(_mm_cmpeq_epi8(y,x));
+  return eq == 0 ? 16 : __builtin_ctz(eq);
+  /*
+  int i;
+  for (i = 0; i < 16 && byte != bytes[i]; ++i) {}
+  return i;
+  */
+}
+
+int lb16(unsigned char byte, const unsigned char *bytes) {
+  const auto x = _mm_loadu_si128(reinterpret_cast<const __m128i *>(bytes));
+  const auto y = _mm_set1_epi8(byte);
+  const auto z = _mm_subs_epu8(y,x);
+  const auto zero = _mm_setzero_si128();
+  const auto k = _mm_cmpeq_epi8(z,zero);
+  const auto le = _mm_movemask_epi8(k);
+  return le == 0 ? 16 : __builtin_ctz(le);
+}
+
+int lb32(unsigned char byte, const unsigned char *bytes) {
+  const auto x0 = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(bytes));
+  const auto y0 = _mm256_set1_epi8(byte);
+  const auto z0 = _mm256_subs_epu8(y0,x0);
+  const auto zero0 = _mm256_setzero_si256();
+  const auto k0 = _mm256_cmpeq_epi8(z0,zero0);
+  if (!_mm256_testz_si256(k0,k0)) {
+    const auto le = _mm256_movemask_epi8(k0);
+    return __builtin_ctz(le);
+  } else {
+    return 32;
+  }
+}
+
+int lb48(unsigned char byte, const unsigned char *bytes) {
+  const auto x0 = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(bytes));
+  const auto x1 = _mm_loadu_si128(reinterpret_cast<const __m128i *>(bytes+32));
+  const auto y0 = _mm256_set1_epi8(byte);
+  const auto y1 = _mm_set1_epi8(byte);
+  const auto z0 = _mm256_subs_epu8(y0,x0);
+  const auto z1 = _mm_subs_epu8(y1,x1);
+  const auto zero0 = _mm256_setzero_si256();
+  const auto zero1 = _mm_setzero_si128();
+  const auto k0 = _mm256_cmpeq_epi8(z0,zero0);
+  const auto k1 = _mm_cmpeq_epi8(z1,zero1);
+  if (_mm256_testz_si256(k0,k0)) {
+    const auto le = _mm_movemask_epi8(k1);
+    return le == 0 ? 48 : __builtin_ctz(le) + 32;
+  } else {
+    const auto le = _mm256_movemask_epi8(k0);
+    return __builtin_ctz(le);
+  }
+}
+
+int bfind8y1(unsigned char byte, uint32_t data) {
+  /*
+  unsigned char bytes[4];
+  std::memcpy(bytes, &data, 4);
+  return bfind8y(byte, bytes);
+  */
+ /*
+  const auto x = _mm_set1_pi32(data);
+  const auto y = _mm_set1_pi8(byte);
+  const auto eq = _mm_movemask_pi8(_mm_cmpeq_pi8(y,x));
+  return eq == 0 ? 4 : __builtin_ctz(eq);
+*/
+
+      const auto x = _mm_set1_epi32(data);
+    const auto y = _mm_set1_epi8(byte);
+    const auto eq = _mm_movemask_epi8(_mm_cmpeq_epi8(y,x));
+    return eq == 0 ? 4 : __builtin_ctz(eq);
+}
+
+template<typename T>
+bool sorted(const unsigned char *bytes, const T *children, size_t n) {
+  auto prev = *bytes;
+  size_t i;
+  for (i = 1; i < n && children[i]; ++i) {
+    CHECK_LT(prev, bytes[i]) << " n=" << n << " bytes=[" << binary::hex(folly::ByteRange{bytes,n}) << "]";
+    prev = bytes[i];
+  }
+  while (i < n) {
+    assert(!children[i]);
+    CHECK_EQ(bytes[i], 0xff) << " i=" << i << " n=" << n << " bytes=[" << binary::hex(folly::ByteRange{bytes,n}) << "]";
+    ++i;
+  }
+  return true;
+}
+
+#else
+
+BytePos bfind(unsigned char byte, uint32_t data) {
+  for (unsigned int i = 0; i < 4; ++i) {
+    if (byte == (data&0xff)) {
+      return {i, i};
+    } else if (byte < (data&0xff)) {
+      return {4, i};
+    }
+    data >>= 8;
+  }
+  return {4,4};
+}
+
+#endif
+
+/*
+unsigned char beq
+    return
+        (byte > foo.spare[0]) +
+        (byte > foo.spare[1]) +
+        (byte > foo.spare[2]) +
+        (byte > foo.spare[3]); 
+*/
+
 }
 
 Tree::Node::Insert Tree::Node0::insert(
@@ -988,12 +1297,81 @@ Tree::Node::Insert Tree::Node4::insert(
   const auto byte = *clause.data;
   ++clause.data;
   --clause.key_size;
-  unsigned char i;
-  for (i = 0; i < 4 && byte != bytes()[i]; ++i) {}
-  if (i < 4 && children[i]) {
-    return Node::Insert::cont(&children[i], clause.data);
+  const auto eq = bfind8y1(byte, node.data32);
+  if (eq < 4 && children[eq]) {
+    return Node::Insert::cont(&children[eq], clause.data);
   } else {
     auto leaf = Node::newNode0(allocator, clause);
+    if (children[3] == Node::null) {
+      unsigned char index = children[2] == Node::null ? 2 : 3;
+      bytes()[index] = byte;
+      children[index] = Node::ptr(leaf);
+      leaf->node.parent = Node::Uplink(Node::ptr(this), index);
+      node.untag(Tree::Node::Tag::Sorted);
+    } else {
+      auto c = Node::cloneAs<Node16>(allocator, node);
+      std::memcpy(c->bytes, bytes(), 4);
+      std::memcpy(c->children, children, 4 * sizeof(children[0]));
+      for (auto i = 0; i < 4; ++i) {
+        children[i]->parent = Node::Uplink(Node::ptr(c), i);
+      }
+      c->bytes[4] = byte;
+      c->children[4] = Node::ptr(leaf);
+      leaf->node.parent = Node::Uplink(Node::ptr(c), 4);
+      c->node.spare[0] = 5;
+      allocator.free(this);
+      me = Node::ptr(c);
+    }
+    return Node::Insert::inserted(leaf);
+  }
+#if 0
+  const auto [eq, le] = bfind(byte, node.data32);
+  if (eq < 4 && children[eq]) {
+    return Node::Insert::cont(&children[eq], clause.data);
+  } else {
+    auto leaf = Node::newNode0(allocator, clause);
+    if (children[3] == Node::null) {
+      if (children[2] != Node::null && le <= 2) {
+        bytes()[3] = bytes()[2];
+        children[3] = children[2];
+        children[3]->parent.setIndex(3);
+      }
+      if (le <= 1) {
+        bytes()[2] = bytes()[1];
+        children[2] = children[1];
+        children[2]->parent.setIndex(2);
+      }
+      if (le == 0) {
+        bytes()[1] = bytes()[0];
+        children[1] = children[0];
+        children[1]->parent.setIndex(1);
+      }
+      bytes()[le] = byte;
+      children[le] = Node::ptr(leaf);
+      leaf->node.parent = Node::Uplink(Node::ptr(this), le);
+    } else {
+      auto c = Node::cloneAs<Node16>(allocator, node);
+      int j;
+      for (j = 0; j < le; ++j) {
+        c->bytes[j] = bytes()[j];
+        c->children[j] = children[j];
+        c->children[j]->parent = Node::Uplink(Node::ptr(c), j);
+      }
+      leaf->node.parent = Node::Uplink(Node::ptr(c), le);
+      c->bytes[le] = byte;
+      c->children[le] = Node::ptr(leaf);
+      while (j < 4) {
+        c->bytes[j+1] = bytes()[j];
+        c->children[j+1] = children[j];
+        c->children[j+1]->parent = Node::Uplink(Node::ptr(c), j+1);
+        ++j;
+      }
+      std::fill(c->bytes+5, c->bytes+16, 0xff);
+      std::fill(c->children+5, c->children+16, Node::null);
+      allocator.free(this);
+      me = Node::ptr(c); 
+    }
+    /*
     for (i = 0; i < 4 && children[i]; ++i) {}
     if (i < 4) {
       while (i > 0 && bytes()[i-1] > byte) {
@@ -1026,23 +1404,135 @@ Tree::Node::Insert Tree::Node4::insert(
         c->children[i+1]->parent = Node::Uplink(Node::ptr(c), i+1);
         ++i;
       }
+      std::fill(c->children+5, c->children+16, Node::null);
       allocator.free(this);
       me = Node::ptr(c);
     }
+    */
     return Node::Insert::inserted(leaf);
   }
+#endif
 }
 
 Tree::Node::Insert Tree::Node16::insert(
     Allocator& allocator,
     Node::Ptr& me,
     Fact::Clause clause) {
+  __builtin_prefetch(bytes);
   if (clause.key_size == 0) {
     error("inserted key is prefix of existing key");
   }
   const auto byte = *clause.data;
   ++clause.data;
   --clause.key_size;
+#if 1
+  const auto eq = bfind16y(byte, bytes);
+  const auto end = node.spare[0];
+  if (eq < end) {
+    assert(bytes[eq] == byte);
+    return Node::Insert::cont(&children[eq], clause.data);
+  } else {
+    auto leaf = Node::newNode0(allocator, clause);
+    if (end < 16) {
+      bytes[end] = byte;
+      children[end] = Node::ptr(leaf);
+      leaf->node.parent = Node::Uplink(Node::ptr(this), end);
+      node.spare[0] = end+1;
+      node.untag(Tree::Node::Tag::Sorted);
+    } else {
+      auto c = Node::cloneAs<Node48>(allocator, node);
+      std::memcpy(c->bytes, bytes, 16);
+      std::memcpy(c->children, children, 16 * sizeof(children[0]));
+      for (auto i = 0; i < 16; ++i) {
+        children[i]->parent = Node::Uplink(Node::ptr(c), i);
+      }
+      for (auto i = 0; i < 16; ++i) {
+        c->indices[bytes[i]] = i;
+      }
+      c->bytes[16] = byte;
+      c->children[16] = Node::ptr(leaf);
+      leaf->node.parent = Node::Uplink(Node::ptr(c), 16);
+      c->indices[byte] = 16;
+      c->node.spare[0] = 17;
+      allocator.free(this);
+      me = Node::ptr(c);
+    }
+    return Node::Insert::inserted(leaf);
+  }
+#elif 1
+  const auto [eq, le] = bfind16x(byte, bytes);
+  const auto end = (node.data32 & 0xf) + 5;
+  if (eq < end) {
+    return Node::Insert::cont(&children[eq], clause.data);
+  } else {
+    auto leaf = Node::newNode0(allocator, clause);
+    unsigned char index;
+    if (end < 16) {
+      unsigned char next;
+      if (byte > bytes[le]) {
+        index = children[le].index();
+      } else {
+        const auto last = node.data32 >> 4;
+        index = 16;
+        node.data32 = (node.data32 & 0xf) | (uint32_t(end) << 4);
+      }
+      children[le].setIndex(end);
+      bytes[end] = byte;
+      children[end] = Node::Uplink(Node::ptr(leaf), index);
+      leaf->node.parent = Node::Uplink(Node::ptr(this), end);
+      ++node.data32; // end = end + 1
+    } else {
+      // alloc node48
+    }
+  }
+#elif 1
+  const auto [eq,le] = bfind16(byte, bytes);
+  if (eq < 16 && children[eq]) {
+    return Node::Insert::cont(&children[eq], clause.data);
+  } else {
+    auto leaf = Node::newNode0(allocator, clause);
+    auto j = 16;
+    while (children[j-1] == Node::null) {
+      --j;
+    }
+    if (j < 16) {
+      while (j > le) {
+        bytes[j] = bytes[j-1];
+        children[j] = children[j-1];
+        children[j]->parent.setIndex(j);
+        --j;
+      }
+      leaf->node.parent = Node::Uplink(Node::ptr(this), j);
+      bytes[j] = byte;
+      children[j] = Node::ptr(leaf);
+      assert(sorted(bytes, children, 16));
+    } else {
+      auto c = Node::cloneAs<Node48>(allocator, node);
+      while (j > le) {
+        c->bytes[j] = bytes[j-1];
+        c->indices[bytes[j-1]] = j;
+        c->children[j] = children[j-1];
+        c->children[j]->parent = Node::Uplink(Node::ptr(c), j);
+        --j;
+      }
+      leaf->node.parent = Node::Uplink(Node::ptr(c), j);
+      c->bytes[j] = byte;
+      c->indices[byte] = j;
+      c->children[j] = Node::ptr(leaf);
+      while (j > 0) {
+        --j;
+        c->bytes[j] = bytes[j];
+        c->indices[bytes[j]] = j;
+        c->children[j] = children[j];
+        c->children[j]->parent = Node::Uplink(Node::ptr(c), j);
+      }
+      // assert(sorted(c->bytes, c->children, 48));
+      allocator.free(this);
+      me = Node::ptr(c);
+    }
+    return Node::Insert::inserted(leaf);
+  }
+#else
   unsigned char i;
   for (i = 0; i < 16 && byte != bytes[i]; ++i) {}
   if (i < 16 && children[i]) {
@@ -1084,6 +1574,7 @@ Tree::Node::Insert Tree::Node16::insert(
     }
     return Node::Insert::inserted(leaf);
   }
+#endif
 }
 
 Tree::Node::Insert Tree::Node48::insert(
@@ -1096,6 +1587,36 @@ Tree::Node::Insert Tree::Node48::insert(
   const auto byte = *clause.data;
   ++clause.data;
   --clause.key_size;
+  const auto idx = indices[byte];
+  if (idx != 0xff) {
+    assert(idx < node.spare[0]);
+    assert(bytes[idx] == byte);
+    return Node::Insert::cont(&children[idx], clause.data);
+  } else {
+    auto leaf = Node::newNode0(allocator, clause);
+    const auto end = node.spare[0];
+    if (end < 48) {
+      indices[byte] = end;
+      bytes[end] = byte;
+      children[end] = Node::ptr(leaf);
+      leaf->node.parent = Node::Uplink(Node::ptr(this), end);
+      node.spare[0] = end+1;
+      node.untag(Tree::Node::Tag::Sorted);
+    } else {
+      auto c = Node::cloneAs<Node256>(allocator, node);
+      for (auto i = 0; i < 48; ++i) {
+        const auto k = bytes[i];
+        c->children[k] = children[i];
+        children[i]->parent = Node::Uplink(Node::ptr(c), k);
+      }
+      leaf->node.parent = Node::Uplink(Node::ptr(c), byte);
+      c->children[byte] = Node::ptr(leaf);
+      allocator.free(this);
+      me = Node::ptr(c);
+    }
+    return Node::Insert::inserted(leaf);
+  }
+#if 0
   if (indices[byte] != 0xff) {
     return Node::Insert::cont(&children[indices[byte]], clause.data);
   } else {
@@ -1129,6 +1650,7 @@ Tree::Node::Insert Tree::Node48::insert(
     }
     return Node::Insert::inserted(leaf);
   }
+#endif
 }
 
 Tree::Node::Insert Tree::Node256::insert(
@@ -1151,12 +1673,143 @@ Tree::Node::Insert Tree::Node256::insert(
   }
 }
 
+template<typename T>
+bool sort2(T& x, T& y) {
+  if (x > y) {
+    std::swap(x,y);
+    return true;
+  } else {
+    return false;
+  }
+}
+
+void Tree::Node4::doSort() {
+  unsigned char before[4];
+  std::memcpy(before, bytes(), 4);
+  if (children[2] == Node::null) {
+    if (node.spare[0] > node.spare[1]) {
+      std::swap(node.spare[0], node.spare[1]);
+      const auto c0 = children[1];
+      const auto c1 = children[0];
+      c0->parent.setIndex(0);
+      c1->parent.setIndex(1);
+      children[0] = c0;
+      children[1] = c1;
+    }
+  } else if (children[3] == Node::null) {
+    uint16_t b0 = (uint16_t(node.spare[0]) << 8) | 0;
+    uint16_t b1 = (uint16_t(node.spare[1]) << 8) | 1;
+    uint16_t b2 = (uint16_t(node.spare[2]) << 8) | 2;
+    if (b0 > b1) {
+      std::swap(b0, b1);
+    }
+    if (b1 > b2) {
+      std::swap(b1,b2);
+    }
+    if (b0 > b1) {
+      std::swap(b0,b1);
+    }
+    node.spare[0]= b0 >> 8;
+    node.spare[1]= b1 >> 8;
+    node.spare[2]= b2 >> 8;
+    const auto c0 = children[b0&0xff];
+    const auto c1 = children[b1&0xff];
+    const auto c2 = children[b2&0xff];
+    c0->parent.setIndex(0);
+    c1->parent.setIndex(1);
+    c2->parent.setIndex(2);
+    children[0] = c0;
+    children[1] = c1;
+    children[2] = c2;
+  } else {
+    uint16_t b0 = (uint16_t(node.spare[0]) << 8) | 0;
+    uint16_t b1 = (uint16_t(node.spare[1]) << 8) | 1;
+    uint16_t b2 = (uint16_t(node.spare[2]) << 8) | 2;
+    uint16_t b3 = (uint16_t(node.spare[3]) << 8) | 3;
+
+    if (b0 > b1) {
+      std::swap(b0,b1);
+    }
+    if (b2 > b3) {
+      std::swap(b2, b3);
+    }
+    if (b0 > b2) {
+      std::swap(b0, b2);
+    }
+    if (b1 > b3) {
+      std::swap(b1, b3);
+    }
+    if (b1 > b2) {
+      std::swap(b1, b2);
+    }
+
+    node.spare[0]= b0 >> 8;
+    node.spare[1]= b1 >> 8;
+    node.spare[2]= b2 >> 8;
+    node.spare[3]= b3 >> 8;
+    const auto c0 = children[b0&0xff];
+    const auto c1 = children[b1&0xff];
+    const auto c2 = children[b2&0xff];
+    const auto c3 = children[b3&0xff];
+    c0->parent.setIndex(0);
+    c1->parent.setIndex(1);
+    c2->parent.setIndex(2);
+    c3->parent.setIndex(3);
+    children[0] = c0;
+    children[1] = c1;
+    children[2] = c2;
+    children[3] = c3;
+  }
+}
+
+void Tree::Node16::doSort() {
+  struct {
+    unsigned char byte;
+    Node::Ptr child;
+  } entries[16];
+  const auto end = node.spare[0];
+  for (auto i = 0; i < end; ++i) {
+    entries[i].byte = bytes[i];
+    entries[i].child = children[i];
+  }
+  std::sort(entries, entries + end, [&](const auto& x, const auto& y) {
+    return x.byte < y.byte;
+  });
+  for (auto i = 0; i < end; ++i) {
+    bytes[i] = entries[i].byte;
+    children[i] = entries[i].child;
+    entries[i].child->parent.setIndex(i);
+  }
+  std::fill(bytes + end, bytes + 16, 0xff);
+}
+
+void Tree::Node48::doSort() {
+  struct {
+    unsigned char byte;
+    Node::Ptr child;
+  } entries[48];
+  const auto end = node.spare[0];
+  for (auto i = 0; i < end; ++i) {
+    entries[i].byte = bytes[i];
+    entries[i].child = children[i];
+  }
+  std::sort(entries, entries + end, [&](const auto& x, const auto& y) {
+    return x.byte < y.byte;
+  });
+  for (auto i = 0; i < end; ++i) {
+    indices[entries[i].byte] = i;
+    bytes[i] = entries[i].byte;
+    children[i] = entries[i].child;
+    entries[i].child->parent.setIndex(i);
+  }
+}
+
 void Tree::Node0::setClause(Allocator& allocator, Fact::Clause clause) {
   if (clause.key_size <= node.pfx_avail() && clause.value_size == 0) {
-    node.short_prefix_size = static_cast<unsigned char>(clause.key_size << 1);
+    node.short_prefix_size = static_cast<unsigned char>(clause.key_size << Tree::Node::TAG_BITS);
     std::memcpy(node.prefix_bytes, clause.data, clause.key_size);
   } else {
-    node.prefix_size = (clause.key_size << 1) | 1;
+    node.prefix_size = (clause.key_size << Tree::Node::TAG_BITS) | 1;
     auto buf = allocator.allocate(clause.value_size == 0 ? clause.key_size : clause.size() + 4);
     node.prefix = buf;
     std::memcpy(buf, clause.data, clause.key_size);
@@ -1170,14 +1823,14 @@ void Tree::Node0::setClause(Allocator& allocator, Fact::Clause clause) {
 void Tree::Node::shiftPrefix(uint32_t offset, Type type) {
   const auto s = short_prefix_size;
   if ((s&1) == 0) {
-    assert(offset <= (s >> 1));
+    assert(offset <= (s >> TAG_BITS));
     unsigned __int128 x;
     std::memcpy(&x, &short_prefix_size, 12);
     x >>= offset*8;
     std::memcpy(&short_prefix_size, &x, 12);
-    short_prefix_size = s - (static_cast<unsigned char>(offset) << 1);
+    short_prefix_size = s - (static_cast<unsigned char>(offset) << TAG_BITS);
   } else {
-    const auto old_size = prefix_size >> 1;
+    const auto old_size = prefix_size >> TAG_BITS;
     assert(offset <= old_size);
     const auto new_size = old_size - offset;
     if (new_size <= pfx_avail() && !(type == Type::N0 && reinterpret_cast<Node0*>(this)->hasValue())) {
@@ -1186,9 +1839,9 @@ void Tree::Node::shiftPrefix(uint32_t offset, Type type) {
       std::memcpy(&x, prefix + old_size - 12, 12);
       x >>= (11 - new_size)*8;
       std::memcpy(&short_prefix_size, &x, 12);
-      short_prefix_size = static_cast<unsigned char>(new_size) << 1;
+      short_prefix_size = static_cast<unsigned char>(new_size) << TAG_BITS;
     } else {
-      prefix_size = (new_size << 1) | 1;
+      prefix_size = (new_size << TAG_BITS) | 1;
       prefix += offset;
     }
   }
@@ -1269,7 +1922,7 @@ void Tree::Buffer::copyValue(const Node0 *node) {
   }
 }
 
-Tree::Iterator::Iterator(const Node0 *node, Buffer buffer, size_t prefixlen)
+Tree::Iterator::Iterator(Node0 *node, Buffer buffer, size_t prefixlen)
   : node(node), buffer(std::move(buffer)), prefixlen(prefixlen)
   {}
 
@@ -1300,13 +1953,13 @@ Fact::Ref Tree::Iterator::get(Demand demand) {
 }
 
 struct Tree::Cursor {
-  Node::ConstPtr node = Node::null;
+  Node::Ptr node = Node::null;
   Buffer buffer;
   size_t prefixlen = 0;
 
   Cursor() = default;
   Cursor(
-    Node::ConstPtr node,
+    Node::Ptr node,
     Buffer buffer,
     size_t prefixlen = 0);
 
@@ -1314,12 +1967,12 @@ struct Tree::Cursor {
 
   Cursor(
     EnterNode,
-    Node::ConstPtr node,
+    Node::Ptr node,
     Buffer buffer,
     size_t prefixlen = 0);
 
-  Cursor& down(unsigned char byte, Node::ConstPtr child) &;
-  Cursor&& down(unsigned char byte,  Node::ConstPtr child) &&;
+  Cursor& down(unsigned char byte, Node::Ptr child) &;
+  Cursor&& down(unsigned char byte,  Node::Ptr child) &&;
   Iterator leftmost() &&;
   Iterator next() &&;
 
@@ -1327,7 +1980,7 @@ struct Tree::Cursor {
 };
 
 Tree::Cursor::Cursor(
-    Node::ConstPtr node,
+    Node::Ptr node,
     Buffer buffer,
     size_t prefixlen)
   : node(node), buffer(std::move(buffer)), prefixlen(prefixlen)
@@ -1335,7 +1988,7 @@ Tree::Cursor::Cursor(
 
 Tree::Cursor::Cursor(
     EnterNode,
-    Node::ConstPtr node,
+    Node::Ptr node,
     Buffer buf,
     size_t prefixlen)
   : Cursor(node, std::move(buf), prefixlen) {
@@ -1345,18 +1998,21 @@ Tree::Cursor::Cursor(
 Tree::Iterator Tree::Cursor::leftmost() && {
   assert(node != Node::null);
   while (node.type() != Node::Type::N0) {
-    const auto child = Node::dispatch(node, [&](auto p) { return p->at(0); });
+    const auto child = Node::dispatch(node, [&](auto p) {
+      p->sort();
+      return p->at(0);
+    });
     assert(child.node != Node::null);
     buffer.enter(child.byte, child.node.pointer());
     node = child.node;
   }
   return Iterator(
-    reinterpret_cast<const Node0 *>(node.pointer()),
+    reinterpret_cast<Node0 *>(node.pointer()),
     std::move(buffer),
     prefixlen);
 }
 
-Tree::Cursor& Tree::Cursor::down(unsigned char byte, Node::ConstPtr child) & {
+Tree::Cursor& Tree::Cursor::down(unsigned char byte, Node::Ptr child) & {
   assert(child != Node::null);
   assert(child->parent.ptr() == node);
   buffer.enter(byte, child.pointer());
@@ -1364,7 +2020,7 @@ Tree::Cursor& Tree::Cursor::down(unsigned char byte, Node::ConstPtr child) & {
   return *this;
 }
 
-Tree::Cursor&& Tree::Cursor::down(unsigned char byte, Node::ConstPtr child) && {
+Tree::Cursor&& Tree::Cursor::down(unsigned char byte, Node::Ptr child) && {
   return std::move(down(byte, child));
 }
 
@@ -1483,24 +2139,78 @@ Tree::Node::Child Tree::Node0::find(unsigned char) const {
   return {};
 }
 
+FOLLY_NOINLINE
 Tree::Node::Child Tree::Node4::find(unsigned char byte) const {
+  /*
+  const auto [eq, _] = bfind(byte, node.data32);
+  if (eq < 4 && children[eq]) {
+    return {children[eq], static_cast<unsigned char>(eq)};
+  } else {
+    return {};
+  }
+  */
+  /*
   for (auto i = 0; i < 4 && children[i]; ++i) {
     if (bytes()[i] == byte) {
       return {children[i], static_cast<unsigned char>(i)};
     }
   }
+
   return {};
+  */
+ /*
+  for (auto i = 0; i < 4; ++i) {
+    if (byte == bytes()[i]) {
+      return {children[i], static_cast<unsigned char>(i)};
+    }
+  }
+  */
+
+  const auto eq = bfind8y1(byte, node.data32);
+  if (eq < 4) {
+    return {children[eq], static_cast<unsigned char>(eq)};
+  } else {
+    return {};
+  }
 }
 
+FOLLY_NOINLINE
 Tree::Node::Child Tree::Node16::find(unsigned char byte) const {
+  const auto eq = bfind16y(byte, bytes);
+  const auto end = node.spare[0];
+  if (eq < end) {
+    return {children[eq], static_cast<unsigned char>(eq)};
+  } else {
+    return {};
+  }
+  /*
+  const auto i = std::lower_bound(bytes, bytes+16, byte);
+  const auto k = i - bytes;
+  if (k < 16 && children[k]) {
+    return {children[k], static_cast<unsigned char>(k)};
+  } else {
+    return {};
+  }
+  */
+ /*
+  const auto [eq, _] = bfind16(byte, bytes);
+  if (eq < 16) {
+    return {children[eq], static_cast<unsigned char>(eq)};
+  } else {
+    return {};
+  }
+  */
+  /*
   for (auto i = 0; i < 16 && children[i]; ++i) {
     if (bytes[i] == byte) {
       return {children[i], static_cast<unsigned char>(i)};
     }
   }
   return {};
+  */
 }
 
+FOLLY_NOINLINE
 Tree::Node::Child Tree::Node48::find(unsigned char byte) const {
   if (indices[byte] != 0xff) {
     return {children[indices[byte]], indices[byte]};
@@ -1509,6 +2219,7 @@ Tree::Node::Child Tree::Node48::find(unsigned char byte) const {
   }
 }
 
+FOLLY_NOINLINE
 Tree::Node::Child Tree::Node256::find(unsigned char byte) const {
   return {children[byte], byte};
 }
@@ -1518,7 +2229,7 @@ Tree::Iterator Tree::find(folly::ByteRange key) const {
     return {};
   }
   auto keypos = key.begin();
-  Node::ConstPtr node = impl->root;
+  Node::Ptr node = impl->root;
   while (node.type() != Node::Type::N0) {
     const auto prefix = node->getPrefix();
     // const auto [p,k] = mismatch(folly::ByteRange{prefix.data, prefix.size}, {keypos, key.end()});
@@ -1537,7 +2248,7 @@ Tree::Iterator Tree::find(folly::ByteRange key) const {
   const auto prefix = node->getPrefix();
   return
     folly::ByteRange(keypos, key.end()) == folly::ByteRange(prefix.data, prefix.size)
-    ? Iterator(reinterpret_cast<const Node0 *>(node.pointer()), impl->buffer(key))
+    ? Iterator(reinterpret_cast<Node0 *>(node.pointer()), impl->buffer(key))
     : Iterator();
 }
 
@@ -1545,36 +2256,79 @@ Tree::Node::Child Tree::Node0::lower_bound(unsigned char) const {
   return {};
 }
 
+FOLLY_NOINLINE
 Tree::Node::Child Tree::Node4::lower_bound(unsigned char byte) const {
-  int i;
-  for (i = 0; i < 4 && bytes()[i] < byte && children[i]; ++i) {}
-  if (i < 4) {
-    return {children[i], bytes()[i]};
-  } else {
-    return {};
+  assert(node.tagged(Tree::Node::Tag::Sorted));
+  __builtin_prefetch(children);
+  if (byte <= bytes()[0]) {
+    return {children[0], bytes()[0]};
   }
+  if (byte <= bytes()[1]) {
+    return {children[1], bytes()[1]};
+  }
+  if (children[2] != Node::null) {
+    if (byte <= bytes()[2]) {
+      return {children[2], bytes()[2]};
+    }
+    if (children[3] != Node::null && byte <= bytes()[3]) {
+      return {children[3], bytes()[3]};
+    } 
+  }
+  return {};
 }
 
+FOLLY_NOINLINE
 Tree::Node::Child Tree::Node16::lower_bound(unsigned char byte) const {
-  int i;
-  for (i = 0; i < 16 && bytes[i] < byte && children[i]; ++i) {}
-  if (i < 16) {
-    return {children[i], bytes[i]};
+  assert(node.tagged(Tree::Node::Tag::Sorted));
+  __builtin_prefetch(bytes);
+  __builtin_prefetch(children);
+  __builtin_prefetch(children+8);
+  const auto end = node.spare[0];
+  const auto le = lb16(byte, bytes);
+  if (le < end) {
+    return {children[le], bytes[le]};
   } else {
     return {};
   }
+  /*
+  for (auto i = 0; i < end; ++i) {
+    if (byte <= bytes[i]) {
+      return {children[i], bytes[i]};
+    }
+  }
+  return {};
+  */
 }
 
+FOLLY_NOINLINE
 Tree::Node::Child Tree::Node48::lower_bound(unsigned char byte) const {
-  int i;
-  for (i = 0; i < 48 && bytes[i] < byte && children[i]; ++i) {}
-  if (i < 48) {
-    return {children[i], bytes[i]};
+  assert(node.tagged(Tree::Node::Tag::Sorted));
+  __builtin_prefetch(bytes);
+  __builtin_prefetch(children);
+  __builtin_prefetch(children+8);
+  __builtin_prefetch(children+16);
+  // __builtin_prefetch(children+32);
+  // __builtin_prefetch(children+40);
+  const auto end = node.spare[0];
+  const auto le = end > 32 ? lb48(byte, bytes) : lb32(byte, bytes);
+  if (le < end) {
+    const auto c = children[le];
+    __builtin_prefetch(c.pointer()->prefix_bytes);
+    return {c, bytes[le]};
   } else {
     return {};
   }
+  /*
+  for (auto i = 0; i < end; ++i) {
+    if (byte <= bytes[i]) {
+      return {children[i], bytes[i]};
+    }
+  }
+  return {};
+  */
 }
 
+FOLLY_NOINLINE
 Tree::Node::Child Tree::Node256::lower_bound(unsigned char byte) const {
   for (int i = byte; i < 256; ++i) {
     if (children[i]) {
@@ -1588,7 +2342,7 @@ Tree::Iterator Tree::lower_bound(folly::ByteRange key) const {
   if (impl->root == Node::null) {
     return {};
   }
-  Node::ConstPtr node = impl->root;
+  Node::Ptr node = impl->root;
   auto keypos = key.begin();
   while (true) {
     const auto prefix = node->getPrefix();
@@ -1597,7 +2351,9 @@ Tree::Iterator Tree::lower_bound(folly::ByteRange key) const {
     if (keypos + m == key.end() || (m != prefix.size && keypos[m] < prefix.data[m])) {
       return Cursor(Cursor::Enter, node, impl->buffer({key.begin(), keypos})).leftmost();
     } else if (m == prefix.size) {
+      const auto was_sorted = node->tagged(Node::Tag::Sorted);
       const auto child = Node::dispatch(node, [b=keypos[m]](auto p) {
+        p->sort();
         return p->lower_bound(b);
       });
       if (child.node) {
@@ -1672,19 +2428,27 @@ void Tree::Node::validate(ConstPtr node, ConstPtr p, unsigned int i, unsigned in
 void Tree::Node0::validate() const {}
 
 void Tree::Node4::validate() const {
-  if (children[0] == Node::null) {
-    LOG(ERROR) << "Node4::validate: empty";
+  if (children[0] == Node::null || children[1] == Node::null) {
+    LOG(ERROR) << "Node4::validate: too few children";
   }
-  auto b = bytes()[0];
-  for (auto i = 1; i < 4 && children[i]; ++i) {
-    if (bytes()[i] < b) {
-      LOG(ERROR) << "Node4::validate: not sorted";
-      break;
-    } else if (bytes()[i] == b) {
-      LOG(ERROR) << "Node4::validate: duplicate";
-      break;
+  if (node.tagged(Tree::Node::Tag::Sorted)) {
+    auto b = bytes()[0];
+    for (auto i = 1; i < 4 && children[i]; ++i) {
+      if (bytes()[i] < b) {
+        LOG(ERROR) << "Node4::validate(sorted): not sorted";
+        break;
+      } else if (bytes()[i] == b) {
+        LOG(ERROR) << "Node4::validate(sorted): duplicate";
+        break;
+      }
+      b = bytes()[i];
     }
-    b = bytes()[i];
+  } else {
+    if (bytes()[0] == bytes()[1]
+        || (children[2] != Node::null && (bytes()[0] == bytes()[2] || bytes()[1] == bytes()[2]))
+        || (children[3] != Node::null && (bytes()[0] == bytes()[3] || bytes()[1] == bytes()[3]) || bytes()[1] == bytes()[3])) {
+        LOG(ERROR) << "Node4::validate(unsorted): duplicate";
+    }
   }
   for (auto i = 0; i < 4 && children[i]; ++i) {
     Node::validate(children[i], Node::ptr(this), i, bytes()[i]);
@@ -1692,44 +2456,72 @@ void Tree::Node4::validate() const {
 }
 
 void Tree::Node16::validate() const {
-  if (children[0] == Node::null) {
-    LOG(ERROR) << "Node16::validate: empty";
+  const auto end = node.spare[0];
+  if (end < 5) {
+    LOG(ERROR) << "Node16::validate: too few children";
+  } else if (end > 16) {
+    LOG(ERROR) << "Node16::validate: end out of bounds";
   }
-  auto b = bytes[0];
-  int i;
-  for (i = 1; i < 16 && children[i]; ++i) {
-    if (bytes[i] < b) {
-      LOG(ERROR) << "Node16::validate: not sorted";
-    } else if (bytes[i] == b) {
-      LOG(ERROR) << "Node16::validate: duplicate";
+  if (node.tagged(Tree::Node::Tag::Sorted)) {
+    auto b = bytes[0];
+    int i;
+    for (i = 1; i < 16 && children[i]; ++i) {
+      if (bytes[i] < b) {
+        LOG(ERROR) << "Node16::validate: not sorted";
+      } else if (bytes[i] == b) {
+        LOG(ERROR) << "Node16::validate: duplicate";
+      }
+      b = bytes[i];
     }
-    b = bytes[i];
+  } else {
+    for (auto i = 0; i < end; ++i) {
+      for (auto j = i+1; j < end; ++j) {
+        if (bytes[i] == bytes[j]) {
+          LOG(ERROR) << "Node16::validate(unsorted): duplicate";
+          break;
+        }
+      }
+    }
   }
-  if (i < 5) {
-    LOG(ERROR) << "Node16::validate: only " << i << "children";
-  }
-  for (auto i = 0; i < 16 && children[i]; ++i) {
-    Node::validate(children[i], Node::ptr(this), i, bytes[i]);
+  for (auto i = 0; i < end; ++i) {
+    if (children[i] == Node::null) {
+      LOG(ERROR) << "Node16::validate: child is null " << i << "/" << int(end);
+      LOG(ERROR) << "Node16 is " << (node.tagged(Tree::Node::Tag::Sorted) ? "sorted" : "not sorted");
+      break;
+    } else {
+      Node::validate(children[i], Node::ptr(this), i, bytes[i]);
+    }
   }
 }
 
 void Tree::Node48::validate() const {
-    int idx = -1;
+  const auto end = node.spare[0];
+  if (end < 17) {
+    LOG(ERROR) << "Node48::validate: too few children";
+  } else if (end > 48) {
+    LOG(ERROR) << "Node48::validate: end out of bounds";
+  }
   size_t count = 0;
   for (auto i = 0; i < 256; ++i) {
     if (indices[i] != 0xFF) {
-      if (indices[i] != idx+1) {
-        LOG(ERROR) << "Node48::validate: index out of order";
-      }
-      idx = indices[i];
       ++count;
-    }
-    if (bytes[indices[i]] != i) {
-        LOG(ERROR) << "Node48::validate: bytes out of sync";
+      if (bytes[indices[i]] != i) {
+      LOG(ERROR) << "Node48::validate: bytes out of sync";
+      }
     }
   }
-  if (count < 17) {
-    LOG(ERROR) << "Node48::validate: only " << count << "children";
+  if (count != end) {
+      LOG(ERROR) << "Node48::validate: count mismatch";
+  }
+  if (node.tagged(Tree::Node::Tag::Sorted)) {
+    auto b = bytes[0];
+    for (auto i = 1; i < end; ++i) {
+      if (bytes[i] <= b) {
+        LOG(ERROR) << "Node48::validate(sorted): bytes not sorted";
+        break;
+      }
+      b = bytes[i];
+    }
   }
   for (auto i = 0; i < 256; ++i) {
     if (indices[i] != 0xff) {
@@ -1773,18 +2565,69 @@ void Tree::Node0::keys(std::string& buf, std::vector<std::string>& v) const {
 }
 
 void Tree::Node4::keys(std::string& buf, std::vector<std::string>& v) const {
-  for (auto i = 0; i < 4 && children[i]; ++i) {
-    buf.push_back(bytes()[i]);
-    Node::keys(children[i], buf, v);
-    buf.pop_back();
+  if (node.tagged(Tree::Node::Tag::Sorted)) {
+    for (auto i = 0; i < 4 && children[i]; ++i) {
+      buf.push_back(bytes()[i]);
+      Node::keys(children[i], buf, v);
+      buf.pop_back();
+    }
+  } else {
+    struct {
+      unsigned char byte;
+      std::vector<std::string> keys;
+    } entries[4];
+    const auto end =
+      children[3] != Node::null ? 4 :
+      children[2] != Node::null ? 3 :
+      2;
+    for (auto i = 0; i < end; ++i) {
+      entries[i].byte = bytes()[i];
+      buf.push_back(bytes()[i]);
+      Node::keys(children[i], buf, entries[i].keys);
+      buf.pop_back();
+    }
+    std::sort(entries, entries+end, [](const auto& x, const auto& y) {
+      return x.byte < y.byte;
+    });
+    for (auto i = 0; i < end; ++i) {
+      v.insert(
+        v.end(),
+        std::make_move_iterator(entries[i].keys.begin()),
+        std::make_move_iterator(entries[i].keys.end())); 
+    }
   }
 }
 
 void Tree::Node16::keys(std::string& buf, std::vector<std::string>& v) const {
-  for (auto i = 0; i < 16 && children[i]; ++i) {
-    buf.push_back(bytes[i]);
-    Node::keys(children[i], buf, v);
-    buf.pop_back();
+  if (node.tagged(Tree::Node::Tag::Sorted)) {
+    for (auto i = 0; i < 16 && children[i]; ++i) {
+      buf.push_back(bytes[i]);
+      Node::keys(children[i], buf, v);
+      buf.pop_back();
+    }
+  } else {
+    struct {
+      unsigned char byte;
+      std::vector<std::string> keys;
+    } entries[16];
+    const auto end = node.spare[0];
+    assert(end <= 16);
+    for (auto i = 0; i < end; ++i) {
+      assert(children[i] != Node::null);
+      entries[i].byte = bytes[i];
+      buf.push_back(bytes[i]);
+      Node::keys(children[i], buf, entries[i].keys);
+      buf.pop_back();
+    }
+    std::sort(entries, entries+end, [](const auto& x, const auto& y) {
+      return x.byte < y.byte;
+    });
+    for (auto i = 0; i < end; ++i) {
+      v.insert(
+        v.end(),
+        std::make_move_iterator(entries[i].keys.begin()),
+        std::make_move_iterator(entries[i].keys.end())); 
+    } 
   }
 }
 
@@ -1850,7 +2693,7 @@ void Tree::Node4::dump(std::ostream& s, int indent, const std::string& prefix) c
   s << spaces(indent) << "N4 " << prefix << std::endl;
   for (auto i = 0; i < 4 && children[i]; ++i) {
     s << spaces(indent+2) << binary::hex(bytes()[i]) << std::endl;
-    Node::dump(children[i], s, indent+4);
+    // Node::dump(children[i], s, indent+4);
   }
 }
 
@@ -1893,7 +2736,7 @@ void Tree::dump(std::ostream& s) const {
 
 void Tree::Node::stats(ConstPtr node, Stats& s) {
   if ((node->prefix_size & 1) != 0) {
-    s.data_used += (node->prefix_size >> 1);
+    s.data_used += (node->prefix_size >> TAG_BITS);
   }
   dispatch(node, [&](auto p) { p->stats(s); });
 }

@@ -268,6 +268,12 @@ const char *glean_lookup_seek_count(
   size_t *count
 );
 
+const char *glean_lookup_seek_each(
+  Lookup *lookup,
+  FactBlock *block,
+  bool *result
+);
+
 const char *glean_define_fact(
   Define *facts,
   glean_predicate_id_t predicate,

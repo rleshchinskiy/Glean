@@ -26,11 +26,13 @@ module Glean.RTS.Foreign.FactSet
   , random
   , copyWithRandomRepeats
 
+  , FactBlock
   , copyFactBlock
   , fromFactBlock
 
   , containsById
   , containsByKey
+  , seekEach
   ) where
 
 import Control.Exception
@@ -225,6 +227,13 @@ containsByKey l block =
     r <- invoke $ glean_lookup_contains_by_key look ptr
     return $ r /= 0
 
+seekEach ::  CanLookup l => l -> FactBlock -> IO Bool
+seekEach l block =
+  withLookup l $ \look ->
+  with block $ \ptr -> do
+    r <- invoke $ glean_lookup_seek_each look ptr
+    return $ r /= 0
+
 foreign import ccall unsafe glean_factset_new
   :: Fid -> Ptr (Ptr FactSet) -> IO CString
 foreign import ccall unsafe "&glean_factset_free" glean_factset_free
@@ -332,6 +341,12 @@ foreign import ccall safe glean_lookup_contains_by_id
 
 
 foreign import ccall safe glean_lookup_contains_by_key
+  :: Ptr Lookup
+  -> Ptr FactBlock
+  -> Ptr CBool
+  -> IO CString
+
+foreign import ccall safe glean_lookup_seek_each
   :: Ptr Lookup
   -> Ptr FactBlock
   -> Ptr CBool

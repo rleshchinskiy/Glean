@@ -442,6 +442,28 @@ const char *glean_lookup_seek_count(
   });
 }
 
+const char *glean_lookup_seek_each(
+    Lookup *lookup,
+    FactBlock *block,
+    bool *result) {
+  return ffi::wrap([=] {
+    for (const auto& fact : block->facts) {
+      auto iter = lookup->seek(fact->type(), fact->key(), 0);
+      auto ref = iter->get(FactIterator::Demand::KeyOnly);
+      if (ref.id != fact->id()) {
+        LOG(ERROR) << "seekEach: was looking for "
+          << fact->id().toWord() << " (" << fact->type().toWord() << "), got "
+          << ref.id.toWord() << " (" << ref.type.toWord() << ")";
+          LOG(ERROR) << "[" << binary::hex(fact->key()) << "] vs ["
+            << binary::hex(ref.key()) << "]";
+        *result = false;
+        return;
+      }
+    }
+    *result = true;
+  });
+}
+
 const char *glean_define_fact(
     Define *facts,
     glean_predicate_id_t predicate,

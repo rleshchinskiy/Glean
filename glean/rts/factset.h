@@ -189,6 +189,8 @@ private:
       return fact_memory;
     }
 
+    size_t allocatedMemory() const noexcept;
+
   private:
     Id starting_id;
     std::vector<Fact::unique_ptr> facts;
@@ -243,6 +245,8 @@ public:
   size_t factMemory() const noexcept {
     return facts.factMemory();
   }
+
+  size_t allocatedMemory() const noexcept;
 
   PredicateStats predicateStats() const;
 

@@ -164,6 +164,17 @@ public:
     return data[i].value();
   }
 
+  template<typename... Args>
+  mapped_type& at(key_type key, Args&&... args) {
+    reserve(key, key+1);
+    const auto i = key - start;
+    if (!data[i].hasValue()) {
+      data[i] = mapped_type(std::forward<Args>(args)...);
+      ++count;
+    }
+    return data[i].value();
+  }
+
   folly::Optional<mapped_type> get(key_type key) const {
     if (key >= start) {
       const auto i = key - start;

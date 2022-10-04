@@ -11,6 +11,7 @@ module Glean.RTS.Typecheck
   ( CompiledTypecheck
   , checkType
   , checkSignature
+  , randomFact
   ) where
 
 import Control.Monad
@@ -149,3 +150,77 @@ checkSignature key_ty val_ty =
     raise $ "extra bytes at end of " <> str
     ok <- label
     return ()
+
+randomValue
+  :: Register ('Fun '[ 'Word, 'WordPtr ])
+  -> Register ('Fun '[ 'WordPtr ])
+  -> Register ('Fun '[ 'Word, 'WordPtr ])
+  -> Register ('Fun '[ 'Word ])
+  -> Register 'BinaryOutputPtr
+  -> Type
+  -> Code ()
+randomValue gen_fact gen_length gen_nat gen_string output = gen
+  where
+    gen ByteTy = local $ \reg -> do
+      c <- constant 128
+      callFun_1_1 gen_nat c reg
+      outputNat reg output
+    gen NatTy = local $ \reg -> do
+      c <- constant 0
+      callFun_1_1 gen_nat c reg
+      outputNat reg output
+    gen StringTy = callFun_1_0 gen_string $ castRegister output
+    gen (ArrayTy elty) = local $ \size -> mdo
+      callFun_0_1 gen_length size
+      outputNat size output
+      jumpIf0 size end
+      loop <- label
+      gen elty
+      decrAndJumpIfNot0 size loop
+      end <- label
+      return ()
+    gen (RecordTy fields) = mapM_ (gen . fieldDefType) fields
+    gen (SumTy fields) = mdo
+      local $ \sel -> do
+        c <- constant $ fromIntegral $ length fields
+        callFun_1_1 gen_nat c sel
+        outputNat sel output
+        select sel alts
+      alts <- forM fields $ \(FieldDef _ ty) -> do
+        alt <- label
+        gen ty
+        jump end
+        return alt
+      end <- label
+      return ()
+    gen (PredicateTy (PidRef (Pid pid) _)) = local $ \ide -> do
+      t <- constant $ fromIntegral pid
+      callFun_1_1 gen_fact t ide
+      outputNat ide output
+    gen (NamedTy (ExpandedType _ ty)) = gen ty
+    gen (MaybeTy ty) = mdo
+      c <- constant 2
+      local $ \sel -> do
+        callFun_1_1 gen_nat c sel
+        outputNat sel output
+        jumpIf0 sel end
+      gen ty
+      end <- label
+      return ()
+    gen (EnumeratedTy names) = tcEnum $ fromIntegral $ length names
+    gen BooleanTy = tcEnum 2
+
+    tcEnum arity = local $ \sel -> do
+      k <- constant arity
+      callFun_1_1 gen_nat k sel
+      outputNat sel output
+
+randomFact :: Type -> Type -> IO (Subroutine ())
+randomFact key_ty val_ty =
+  generate Optimised $
+    \gen_fact gen_size gen_nat gen_string -> output $ \out ->
+    local $ \key_size -> mdo
+    randomValue gen_fact gen_size gen_nat gen_string out key_ty
+    getOutputSize out key_size
+    randomValue gen_fact gen_size gen_nat gen_string out val_ty
+    ret

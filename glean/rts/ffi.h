@@ -328,6 +328,23 @@ const char *glean_factset_append(
   FactSet *source
 );
 
+const char *glean_factset_random(
+  int64_t first_id,
+  int64_t seed,
+  size_t predicates,
+  const int64_t *pids,
+  const size_t *wanted,
+  const size_t *sizes,
+  const SharedSubroutine **gens,
+  FactSet **facts
+);
+
+const char *glean_factset_copy_with_random_repeats(
+  int64_t seed,
+  double repeatFreq,
+  const FactSet *from,
+  FactSet **facts);
+
 const char *glean_stacked_lookup_new(
   Lookup *base,
   Lookup *added,

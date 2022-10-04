@@ -51,6 +51,7 @@ CXX_SOURCES_glean_cpp_rts = \
     glean/rts/ownership/uset.cpp \
     glean/rts/prim.cpp \
     glean/rts/query.cpp \
+    glean/rts/random.cpp \
     glean/rts/sanity.cpp \
     glean/rts/stats.cpp \
     glean/rts/string.cpp \

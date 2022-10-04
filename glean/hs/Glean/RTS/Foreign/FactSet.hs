@@ -17,20 +17,27 @@ module Glean.RTS.Foreign.FactSet
   , append
   , rebase
   , renameFacts
+
+  , RandomParams(..)
+  , random
+  , copyWithRandomRepeats
   ) where
 
 import Control.Exception
+import Data.Coerce (coerce)
 import Data.Int
 import Data.Vector.Storable as Vector
 import Data.Word
 import Foreign.C.String
 import Foreign.C.Types
 import Foreign.ForeignPtr
+import Foreign.Marshal.Array (withArray)
 import Foreign.Ptr
 
 import Util.FFI
 
 import Glean.FFI
+import Glean.RTS.Foreign.Bytecode (Subroutine)
 import Glean.RTS.Foreign.Define
 import Glean.RTS.Foreign.Inventory (Inventory)
 import Glean.RTS.Foreign.Lookup (Lookup(..), CanLookup(..))
@@ -127,6 +134,46 @@ renameFacts inventory base next batch = do
   subst <- defineUntrustedBatch (stacked base added) inventory batch
   return (added, subst)
 
+data RandomParams = RandomParams
+  { randomParamsWanted :: Int
+  , randomParamsSizeCap :: Int
+  }
+
+random
+  :: Fid
+  -> Maybe Word32
+  -> [(Pid, RandomParams, Subroutine ())]
+  -> IO FactSet
+random firstId seed xs =
+  withArray preds $ \preds_ptr ->
+  withArray (map (fromIntegral . randomParamsWanted) params) $ \wanted_ptr ->
+  withArray (map (fromIntegral . randomParamsSizeCap) params) $ \sizes_ptr ->
+  withMany with gens $ \gen_ps ->
+  withArray gen_ps $ \gens_ptr ->
+  construct $ invoke $ glean_factset_random
+    firstId
+    (maybe (-1) fromIntegral seed)
+    (fromIntegral n)
+    preds_ptr
+    wanted_ptr
+    sizes_ptr
+    gens_ptr
+  where
+    (preds, params, gens) = unzip3 xs
+    !n = length xs
+
+copyWithRandomRepeats
+  :: Maybe Word32
+  -> Double
+  -> FactSet
+  -> IO FactSet
+copyWithRandomRepeats seed repeatFreq facts =
+  with facts $ \facts_ptr ->
+  construct $ invoke $ glean_factset_copy_with_random_repeats
+    (maybe (-1) fromIntegral seed)
+    (coerce repeatFreq)
+    facts_ptr
+
 foreign import ccall unsafe glean_factset_new
   :: Fid -> Ptr (Ptr FactSet) -> IO CString
 foreign import ccall unsafe "&glean_factset_free" glean_factset_free
@@ -182,3 +229,22 @@ foreign import ccall unsafe glean_factset_rebase
 
 foreign import ccall unsafe glean_factset_append
   :: Ptr FactSet -> Ptr FactSet -> IO CString
+
+foreign import ccall safe glean_factset_random
+  :: Fid
+  -> Int64
+  -> CSize
+  -> Ptr Pid
+  -> Ptr CSize
+  -> Ptr CSize
+  -> Ptr (Ptr (Subroutine ()))
+  -> Ptr (Ptr FactSet)
+  -> IO CString
+
+foreign import ccall safe glean_factset_copy_with_random_repeats
+  :: Int64
+  -> CDouble
+  -> Ptr FactSet
+  -> Ptr (Ptr FactSet)
+  -> IO CString
+>>>>>>> 1a48561a (R: add support random batch benchmarks)

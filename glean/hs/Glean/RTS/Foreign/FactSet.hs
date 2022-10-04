@@ -23,7 +23,7 @@ module Glean.RTS.Foreign.FactSet
 
 import Control.Exception
 import Data.Int
-import Data.Vector.Storable as Vector
+import qualified Data.Vector.Storable as V
 import Data.Word
 import Foreign.C.String
 import Foreign.C.Types
@@ -91,19 +91,19 @@ serialize facts =
   with facts $ \facts_ptr -> do
   mkBatch $ invoke $ glean_factset_serialize facts_ptr
 
-serializeReorder :: FactSet -> Vector Int64 -> IO Thrift.Batch
+serializeReorder :: FactSet -> V.Vector Int64 -> IO Thrift.Batch
 serializeReorder facts order =
   with facts $ \facts_ptr -> do
-  unsafeWith order $ \order_ptr -> do
+  V.unsafeWith order $ \order_ptr -> do
     mkBatch $ invoke $ glean_factset_serializeReorder
       facts_ptr
       order_ptr
-      (fromIntegral (Vector.length order))
+      (fromIntegral (V.length order))
 
 rebase :: Inventory -> Thrift.Subst -> LookupCache -> FactSet -> IO FactSet
 rebase inventory Thrift.Subst{..} cache facts =
   with inventory $ \inventory_ptr ->
-  unsafeWith subst_ids $ \ids_ptr ->
+  V.unsafeWith subst_ids $ \ids_ptr ->
   with cache $ \cache_ptr ->
   with facts $ \facts_ptr ->
   construct $ invoke $
@@ -111,7 +111,7 @@ rebase inventory Thrift.Subst{..} cache facts =
       facts_ptr
       inventory_ptr
       (Fid subst_firstId)
-      (fromIntegral $ Vector.length subst_ids)
+      (fromIntegral $ V.length subst_ids)
       ids_ptr
       cache_ptr
 

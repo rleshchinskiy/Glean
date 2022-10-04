@@ -12,6 +12,31 @@ namespace facebook {
 namespace glean {
 namespace binary {
 
+namespace {
+char hexdigit(unsigned char c) {
+  return static_cast<char>(c) + (c < 10 ? '0' : 'a'-10);
+}
+}
+
+std::string hex(unsigned char byte) {
+  std::string buf;
+  buf += hexdigit(byte>>4);
+  buf += hexdigit(byte & 0xf);
+  return buf;
+}
+
+std::string hex(folly::ByteRange bytes) {
+  std::string buf;
+  for (auto byte : bytes) {
+    if (!buf.empty()) {
+      buf += ' ';
+    }
+    buf += hexdigit(byte>>4);
+    buf += hexdigit(byte & 0xf);
+  }
+  return buf;
+}
+
 std::vector<unsigned char> lexicographicallyNext(folly::ByteRange range) {
   const auto end = std::make_reverse_iterator(range.begin());
   auto pos = std::make_reverse_iterator(range.end());

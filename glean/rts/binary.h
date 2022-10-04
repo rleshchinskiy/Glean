@@ -52,6 +52,14 @@ inline folly::fbstring mkFbstring(folly::ByteRange r) {
   return folly::fbstring(reinterpret_cast<const char*>(r.data()), r.size());
 }
 
+std::string hex(unsigned char byte);
+std::string hex(folly::ByteRange bytes);
+
+inline std::string hex(const std::string& s) {
+  return hex(byteRange(s));
+}
+
+
 /// Return the smallest sequence of bytes that is lexicographically larger than
 /// and sequence with the prefix 'range' or the empty sequence if no such
 /// sequence exists. Example:

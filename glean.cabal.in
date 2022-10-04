@@ -1055,6 +1055,22 @@ executable glean
         json,
         split,
 
+executable glean-gen-batch
+    import: fb-haskell, fb-cpp, deps, exe
+    hs-source-dirs: glean/tools/genbatch
+    main-is: GenBatch.hs
+    ghc-options: -main-is GenBatch
+    extra-libraries: stdc++
+    build-depends:
+        glean:client-hs,
+        glean:core,
+        glean:db,
+        glean:lib,
+        glean:rts,
+        glean:schema,
+        glean:stubs,
+        glean:util,
+
 executable glean-search
     import: fb-haskell, fb-cpp, deps, exe
     hs-source-dirs: glean/tools/search

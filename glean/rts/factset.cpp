@@ -56,11 +56,11 @@ void dumpStats(std::ostream& os, const roart::Tree::Stats& stats) {
     << stats.data_used << ','
     << stats.key_size << ','
     << stats.wasted << ','
-    << stats.node0.count << "," << stats.node0.bytes << ","
-    << stats.node4.count << "," << stats.node4.bytes << ","
-    << stats.node16.count << "," << stats.node16.bytes << ","
-    << stats.node48.count << "," << stats.node48.bytes << ","
-    << stats.node256.count << "," << stats.node256.bytes;
+    << stats.node0.count << "," << stats.node0.bytes << "," << stats.node0.wasted << ","
+    << stats.node4.count << "," << stats.node4.bytes << "," << stats.node4.wasted << ","
+    << stats.node16.count << "," << stats.node16.bytes << "," << stats.node16.wasted << ","
+    << stats.node48.count << "," << stats.node48.bytes << "," << stats.node48.wasted << ","
+    << stats.node256.count << "," << stats.node256.bytes << "," << stats.node256.wasted;
 }
 
 }
@@ -69,7 +69,7 @@ size_t FactSet::allocatedMemory() const noexcept {
   size_t mem = facts.allocatedMemory() + keys.allocatedMemory();
   roart::Tree::Stats stats;
   std::ofstream statsfile("/tmp/stats", std::ios_base::app);
-  statsfile << "pid,dsize,dallocated,dused,keys,wasted,leaf_c,leaf_b,n4_c,n4_b,n16_c,n16_b,n48_c,n48_b,n256_c,n256_b\n";
+  statsfile << "pid,dsize,dallocated,dused,keys,wasted,leaf_c,leaf_b,leaf_w,n4_c,n4_b,n4_w,n16_c,n16_b,n16_w,n48_c,n48_b,n48_w,n256_c,n256_b,n256_w\n";
   for (const auto& [pid,tree] : keys) {
     auto s = tree.stats();
     statsfile << pid.toWord() << ",";
@@ -82,11 +82,11 @@ size_t FactSet::allocatedMemory() const noexcept {
     << " dallocated " << stats.data_allocated
     << " dused " << stats.data_used
     << " wasted " << stats.wasted
-    << " leaf " << stats.node0.count << " (" << stats.node0.bytes << ")"
-    << " n4 " << stats.node4.count << " (" << stats.node4.bytes << ")"
-    << " n16 " << stats.node16.count << " (" << stats.node16.bytes << ")"
-    << " n48 " << stats.node48.count << " (" << stats.node48.bytes << ")"
-    << " n256 " << stats.node256.count << " (" << stats.node256.bytes << ")"
+    << " leaf " << stats.node0.count << " (" << stats.node0.bytes << "/" << stats.node0.wasted << ")"
+    << " n4 " << stats.node4.count << " (" << stats.node4.bytes << "/" << stats.node4.wasted << ")"
+    << " n16 " << stats.node16.count << " (" << stats.node16.bytes << "/" << stats.node16.wasted << ")"
+    << " n48 " << stats.node48.count << " (" << stats.node48.bytes << "/" << stats.node48.wasted << ")"
+    << " n256 " << stats.node256.count << " (" << stats.node256.bytes << "/" << stats.node256.wasted << ")"
     ;
 
   mem += stats.bytes;

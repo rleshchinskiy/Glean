@@ -142,6 +142,7 @@ FactSet copyFactSetWithRandomRepeats(
     const FactSet& facts) {
   RNG rng(seed);
   FactSet copy(facts.startingId());
+#if 0
   std::vector<Fact::Ref> copied;
   copied.reserve(facts.size());
 
@@ -154,6 +155,7 @@ FactSet copyFactSetWithRandomRepeats(
     const auto id = copy.define(fact.type, fact.clause);
     CHECK_EQ(id.toWord(), fact.id.toWord());
   }
+#endif
 
   return copy;
 }

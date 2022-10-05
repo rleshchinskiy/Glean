@@ -34,24 +34,28 @@ Fact::unique_ptr mkfact(const std::string& key) {
   });
 }
 
-struct Storage {
-  roart::Tree tree;
-  std::vector<Fact::unique_ptr> facts;
+struct Entry {
+  Fact::unique_ptr fact;
+  roart::Tree::Value::unique_ptr value;
 };
 
-std::pair<roart::Tree, std::vector<Fact::unique_ptr>> mkTree(
-    const std::vector<std::string>& keys) {
+struct Storage {
   roart::Tree tree;
-  std::vector<Fact::unique_ptr> facts;
+  std::vector<Entry> facts;
+};
+
+Storage mkTree(const std::vector<std::string>& keys) {
+  Storage storage;
   for (const auto& key : keys) {
     auto fact = mkfact(key);
     CHECK_EQ(binary::mkString(fact->ref().key()), key);
-    const auto old = tree.insert(/* binary::byteRange(key), */ fact.get());
+    auto value = roart::Tree::Value::alloc(fact->ref());
+    const auto old = storage.tree.insert(binary::byteRange(key), value.get());
     if (old == nullptr) {
-      facts.emplace_back(std::move(fact));
+      storage.facts.push_back(Entry{std::move(fact), std::move(value)});
     }
   }
-  return {std::move(tree), std::move(facts)};
+  return storage;
 }
 
 struct Keys {
@@ -109,15 +113,15 @@ void buildAndCheck(Keys keys) {
 
   EXPECT_EQ(tree.size(), keys.keys.size());
 
-  for (const auto& fact : facts) {
-    const auto b = tree.insert(fact->key(), fact.get());
+  for (const auto& entry : facts) {
+    const auto b = tree.insert(entry.fact->key(), entry.value.get());
     EXPECT_NE(b, nullptr);
-    auto it = tree.find(fact->key());
+    auto it = tree.find(entry.fact->key());
     EXPECT_FALSE(it.done());
-    EXPECT_EQ(it.get().key(), fact->key());
-    it = tree.lower_bound(fact->key());
+    EXPECT_EQ(it.get().key(), entry.fact->key());
+    it = tree.lower_bound(entry.fact->key());
     EXPECT_FALSE(it.done());
-    EXPECT_EQ(it.get().key(), fact->key());
+    EXPECT_EQ(it.get().key(), entry.fact->key());
   }
 
   treeKeys.clear();

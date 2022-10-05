@@ -46,22 +46,28 @@ FactSet& FactSet::operator=(FactSet&&) = default;
 FactSet::~FactSet() noexcept = default;
 
 size_t FactSet::allocatedMemory() const noexcept {
-  size_t bytes = 0;
-  size_t arenas = 0;
-  size_t n = facts.allocatedMemory() + keys.allocatedMemory();
-  for (const auto& k : keys) {
-    // n += k.second.getAllocatedMemorySize();
-    const auto stats = k.second.stats();
-    n += stats.bytes + stats.arena_size; // stats.prefix_length;
-    bytes += stats.bytes;
-    arenas += stats.arena_size;
+  size_t mem = facts.allocatedMemory() + keys.allocatedMemory();
+  roart::Tree::Stats stats;
+  for (const auto& [_,tree] : keys) {
+    stats += tree.stats();
   }
-  LOG(INFO) << "bytes=" << bytes << " sarenas=" << arenas;
-  return n;
+  LOG(INFO)
+    << "dsize " << stats.data_size
+    << " dused " << stats.data_used
+    << " wasted " << stats.wasted
+    << " leaf " << stats.node0.count << " (" << stats.node0.bytes << ")"
+    << " n4 " << stats.node4.count << " (" << stats.node4.bytes << ")"
+    << " n16 " << stats.node16.count << " (" << stats.node16.bytes << ")"
+    << " n48 " << stats.node48.count << " (" << stats.node48.bytes << ")"
+    << " n256 " << stats.node256.count << " (" << stats.node256.bytes << ")"
+    ;
+
+  mem += stats.bytes;
+  return mem;
 }
 
 size_t FactSet::Facts::allocatedMemory() const noexcept {
-  return facts.capacity() * sizeof(facts[0]) + facts.size() * sizeof(*facts[0]);
+  return facts.capacity() * sizeof(facts[0]);
 }
 
 struct FactSet::CachedPredicateStats {
@@ -83,10 +89,11 @@ PredicateStats FactSet::predicateStats() const {
   if (ulock->upto < facts.size()) {
     auto wlock = ulock.moveFromUpgradeToWrite();
     wlock->stats.reserve(keys.low_bound(), keys.high_bound());
-    for (const auto& fact
+    for (const auto leaf
           : folly::range(facts.begin() + wlock->upto, facts.end())) {
-      wlock->stats[fact.type]
-        += MemoryStats::one(fact.key_size + fact.value_size);
+      auto info = roart::Tree::info(leaf);
+      wlock->stats[info.type]
+        += MemoryStats::one(info.key_size + info.value_size);
     }
     wlock->upto = facts.size();
     return wlock->stats;
@@ -109,7 +116,7 @@ Pid FactSet::typeById(Id id) {
   if (id >= facts.startingId()) {
     const auto i = distance(facts.startingId(), id);
     if (i < facts.size()) {
-      return facts[i].type;
+      return roart::Tree::type(facts[i]);
     }
   }
   return Pid::invalid();
@@ -120,7 +127,7 @@ bool FactSet::factById(Id id, std::function<void(Pid, Fact::Clause)> f) {
     const auto i = distance(facts.startingId(), id);
     if (i < facts.size()) {
       std::vector<unsigned char> buf;
-      const auto ref = facts[i].get(FactIterator::Demand::KeyValue, buf);
+      const auto ref = roart::Tree::get(facts[i], FactIterator::Demand::KeyValue, buf);
       f(ref.type, ref.clause);
       return true;
     }
@@ -150,7 +157,7 @@ std::unique_ptr<FactIterator> FactSet::enumerate(Id from, Id upto) {
 
     Fact::Ref get(Demand demand) override {
       return pos != end
-        ? pos->get(demand, buf)
+        ? roart::Tree::get(*pos, demand, buf)
         : Fact::Ref::invalid();
     }
 
@@ -182,7 +189,7 @@ std::unique_ptr<FactIterator> FactSet::enumerateBack(Id from, Id downto) {
       if (pos != end) {
         auto i = pos;
         --i;
-        return i->get(demand, buf);
+        return roart::Tree::get(*i, demand, buf);
       } else {
         return Fact::Ref::invalid();
       }
@@ -301,26 +308,25 @@ Id FactSet::define(Pid type, Fact::Clause clause, Id) {
   }
   const auto next_id = firstFreeId();
   // auto fact = facts.alloc(next_id, type, clause);
-  auto fact = facts.alloc(Fact::Ref{next_id, type, clause});
-  auto& key_map = keys[type];
+  auto& key_map = keys.at(type, type);
   // const auto r = key_map.insert(fact.get());
   // if (r.second) {
-  const auto r = key_map.insert(clause, fact.get());
-  if (r == nullptr) {
-    facts.commit(std::move(fact));
+  const auto r = key_map.insert(next_id, clause);
+  if (r.second) {
+    facts.add(clause, r.first);
     return next_id;
   } else {
     return
       // fact->value() == (*r.first)->value() ? (*r.first)->id() : Id::invalid();
-      clause.value() == r->value() ? r->id : Id::invalid();
+      clause.value() == roart::Tree::value(r.first) ? next_id : Id::invalid();
   }
 }
 
 thrift::Batch FactSet::serialize() const {
   std::vector<unsigned char> buf;
   binary::Output output;
-  for (const auto& fact : facts) {
-    fact.get(FactIterator::Demand::KeyValue, buf).serialize(output);
+  for (const auto fact : facts) {
+    roart::Tree::get(fact, FactIterator::Demand::KeyValue, buf).serialize(output);
   }
 
   thrift::Batch batch;
@@ -348,7 +354,7 @@ FactSet::serializeReorder(folly::Range<const uint64_t *> order) const {
   for (auto i : order) {
     assert(i >= startingId().toWord() &&
            i - startingId().toWord() < facts.size());
-    facts[i - startingId().toWord()].get(FactIterator::Demand::KeyValue, buf).serialize(output);
+    roart::Tree::get(facts[i - startingId().toWord()], FactIterator::Demand::KeyValue, buf).serialize(output);
   }
 
   thrift::Batch batch;
@@ -389,11 +395,12 @@ FactSet FactSet::rebase(
   std::vector<unsigned char> buf;
   const auto split = facts.lower_bound(subst.finish());
 
-  for (const auto& fact : folly::range(facts.begin(), split)) {
-    auto r = substituteFact(inventory, substitute, fact.get(FactIterator::Demand::KeyValue, buf));
+  for (const auto fact : folly::range(facts.begin(), split)) {
+    const auto ref = roart::Tree::get(fact, FactIterator::Demand::KeyValue, buf);
+    auto r = substituteFact(inventory, substitute, ref);
     global.insert({
-      subst.subst(fact.id),
-      fact.type,
+      subst.subst(ref.id),
+      ref.type,
       Fact::Clause::from(r.first.bytes(), r.second)
     });
   }
@@ -401,9 +408,10 @@ FactSet FactSet::rebase(
   FactSet local(new_start);
   auto expected = new_start;
   for (const auto& fact : folly::range(split, facts.end())) {
-    auto r = substituteFact(inventory, substitute, fact.get(FactIterator::Demand::KeyValue, buf));
+    const auto ref = roart::Tree::get(fact, FactIterator::Demand::KeyValue, buf);
+    auto r = substituteFact(inventory, substitute, ref);
     const auto id =
-      local.define(fact.type, Fact::Clause::from(r.first.bytes(), r.second));
+      local.define(ref.type, Fact::Clause::from(r.first.bytes(), r.second));
     CHECK(id == expected);
     ++expected;
   }
@@ -419,8 +427,9 @@ void FactSet::append(FactSet other) {
   keys.merge(std::move(other.keys), [](roart::Tree& left, const roart::Tree& right) {
     // left.insert(right.begin(), right.end());
     for (auto i = left.begin(); !i.done(); i.next()) {
-      auto key = i.getKey();
-      left.insert(Fact::Clause{key.data(), static_cast<uint32_t>(key.size()), 0}, *i);
+      const auto ref = i.get();
+      const auto r = left.insert(ref.id, ref.clause);
+      assert(r.second);
     }
   });
 }

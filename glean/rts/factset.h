@@ -142,6 +142,10 @@ private:
       return starting_id;
     }
 
+    Id firstFreeId() const {
+      return starting_id + facts.size();
+    }
+
 #if 0
     struct deref {
       Fact::Ref operator()(const roart::Tree::Value::unique_ptr& p) const {
@@ -167,23 +171,15 @@ private:
       return facts[i]->ref();
     }
 #endif
-    struct deref {
-      const roart::Tree::Value& operator()(const std::unique_ptr<roart::Tree::Value>& p) const {
-        return *p;
-      }
-    };
-
-    using const_iterator =
-      boost::transform_iterator<
-        deref,
-        std::vector<std::unique_ptr<roart::Tree::Value>>::const_iterator>;
+    using value_type = const roart::Tree::Node0 *;
+    using const_iterator = std::vector<value_type>::const_iterator;
 
     const_iterator begin() const {
-      return boost::make_transform_iterator(facts.begin(), deref());
+      return facts.begin();
     }
 
     const_iterator end() const {
-      return boost::make_transform_iterator(facts.end(), deref());
+      return facts.end();
     }
 
     const_iterator lower_bound(Id id) const {
@@ -200,9 +196,9 @@ private:
           : std::min(distance(startingId(), id)+1, size()));
     }
 
-    const roart::Tree::Value& operator[](size_t i) const {
+    value_type operator[](size_t i) const {
       assert (i < facts.size());
-      return *facts[i];
+      return facts[i];
     }
 
     void clear() {
@@ -210,23 +206,13 @@ private:
       fact_memory = 0;
     }
 
-    //using Token = Fact::unique_ptr;
-    using Token = std::unique_ptr<roart::Tree::Value>;
-
-    Token alloc(Fact::Ref fact) {
-      return std::make_unique<roart::Tree::Value>(fact);
-    }
-
-    void commit(Token token) {
-      fact_memory += token->key_size + token->value_size;
-      facts.push_back(std::move(token));
+    void add(Fact::Clause clause, value_type leaf) {
+      facts.push_back(leaf);
+      fact_memory += clause.size();
     }
 
     void append(Facts other) {
-      facts.insert(
-        facts.end(),
-        std::make_move_iterator(other.facts.begin()),
-        std::make_move_iterator(other.facts.end()));
+      facts.insert(facts.end(), other.facts.begin(), other.facts.end());
       fact_memory += other.fact_memory;
     }
 
@@ -243,7 +229,7 @@ private:
   private:
     Id starting_id;
     // std::vector<Fact::unique_ptr> facts;
-    std::vector<std::unique_ptr<roart::Tree::Value>> facts;
+    std::vector<value_type> facts;
     size_t fact_memory = 0;
   };
 

@@ -61,11 +61,7 @@ size_t FactSet::allocatedMemory() const noexcept {
 }
 
 size_t FactSet::Facts::allocatedMemory() const noexcept {
-  size_t n = facts.capacity() * sizeof(facts[0]);
-  for (const auto& fact : facts) {
-    n += fact->size();
-  }
-  return n;
+  return facts.capacity() * sizeof(facts[0]) + facts.size() * sizeof(*facts[0]);
 }
 
 struct FactSet::CachedPredicateStats {
@@ -309,14 +305,14 @@ Id FactSet::define(Pid type, Fact::Clause clause, Id) {
   auto& key_map = keys[type];
   // const auto r = key_map.insert(fact.get());
   // if (r.second) {
-  const auto r = key_map.insert(clause.key(), fact.get());
+  const auto r = key_map.insert(clause, fact.get());
   if (r == nullptr) {
     facts.commit(std::move(fact));
     return next_id;
   } else {
     return
       // fact->value() == (*r.first)->value() ? (*r.first)->id() : Id::invalid();
-      fact->value() == r->value() ? r->id : Id::invalid();
+      clause.value() == r->value() ? r->id : Id::invalid();
   }
 }
 
@@ -423,7 +419,8 @@ void FactSet::append(FactSet other) {
   keys.merge(std::move(other.keys), [](roart::Tree& left, const roart::Tree& right) {
     // left.insert(right.begin(), right.end());
     for (auto i = left.begin(); !i.done(); i.next()) {
-      left.insert(i.getKey(), *i);
+      auto key = i.getKey();
+      left.insert(Fact::Clause{key.data(), static_cast<uint32_t>(key.size()), 0}, *i);
     }
   });
 }

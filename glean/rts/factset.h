@@ -168,7 +168,7 @@ private:
     }
 #endif
     struct deref {
-      const roart::Tree::Value& operator()(const roart::Tree::Value::unique_ptr& p) const {
+      const roart::Tree::Value& operator()(const std::unique_ptr<roart::Tree::Value>& p) const {
         return *p;
       }
     };
@@ -176,7 +176,7 @@ private:
     using const_iterator =
       boost::transform_iterator<
         deref,
-        std::vector<roart::Tree::Value::unique_ptr>::const_iterator>;
+        std::vector<std::unique_ptr<roart::Tree::Value>>::const_iterator>;
 
     const_iterator begin() const {
       return boost::make_transform_iterator(facts.begin(), deref());
@@ -211,10 +211,10 @@ private:
     }
 
     //using Token = Fact::unique_ptr;
-    using Token = roart::Tree::Value::unique_ptr;
+    using Token = std::unique_ptr<roart::Tree::Value>;
 
     Token alloc(Fact::Ref fact) {
-      return roart::Tree::Value::alloc(fact);
+      return std::make_unique<roart::Tree::Value>(fact);
     }
 
     void commit(Token token) {
@@ -243,7 +243,7 @@ private:
   private:
     Id starting_id;
     // std::vector<Fact::unique_ptr> facts;
-    std::vector<roart::Tree::Value::unique_ptr> facts;
+    std::vector<std::unique_ptr<roart::Tree::Value>> facts;
     size_t fact_memory = 0;
   };
 

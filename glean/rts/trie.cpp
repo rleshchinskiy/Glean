@@ -350,7 +350,8 @@ struct Tree::Node {
 
   enum class Tag : unsigned char {
     Short = 1,
-    Sorted = 2
+    Sorted = 2,
+    HasValue = 2  // intentionally overlaps with Sorted
   };
 
   [[nodiscard]] constexpr bool tagged(Tag tag) const {
@@ -501,23 +502,25 @@ struct Tree::Node0 {
   // uint32_t key_size;
   // uint32_t value_size;
 
-  static constexpr uint32_t HAS_VALUE_BIT = uint32_t(1) << 31;
-  static constexpr uint32_t SIZE_MASK = HAS_VALUE_BIT - 1;
+  // static constexpr uint32_t HAS_VALUE_BIT = uint32_t(1) << 31;
+  // static constexpr uint32_t SIZE_MASK = HAS_VALUE_BIT - 1;
 
   void set_sizes(Fact::Clause clause) {
-    assert(clause.key_size < HAS_VALUE_BIT);
+    // assert(clause.key_size < HAS_VALUE_BIT);
     node.data32 = clause.key_size;
     if (clause.value_size > 0) {
-      node.data32 |= HAS_VALUE_BIT;
+      // node.data32 |= HAS_VALUE_BIT;
+      node.tag(Node::Tag::HasValue);
     }
   }
 
   uint32_t key_size() const {
-    return node.data32 & SIZE_MASK;
+    return node.data32; // & SIZE_MASK;
   }
 
   bool hasValue() const {
-    return (node.data32 & HAS_VALUE_BIT) != 0;
+    // return (node.data32 & HAS_VALUE_BIT) != 0;
+    return node.tagged(Node::Tag::HasValue);
   }
 
   void setClause(Allocator& allocator, Fact::Clause clause);
@@ -572,6 +575,7 @@ struct Tree::Node0 {
 
   void dump(std::ostream& s, int indent, const std::string& prefix) const;
 };
+
 
 struct Tree::Node4 {
   Node node;
@@ -922,6 +926,8 @@ Fact::Ref Tree::get(
     const Node0 *leaf,
     FactIterator::Demand demand,
     std::vector<unsigned char>& buf) {
+  __builtin_prefetch(leaf->node.prefix);
+  __builtin_prefetch(&(leaf->node.parent.ptr()->data32));
   assert(leaf != nullptr);
   const auto vsize = demand == FactIterator::Demand::KeyOnly ? 0 : leaf->value_size();
   buf.resize(leaf->key_size() + vsize);
@@ -935,6 +941,8 @@ Fact::Ref Tree::get(
   while (!current.null()) {
     const auto index = current.index();
     const auto node = current.ptr();
+    __builtin_prefetch(node->prefix);
+    __builtin_prefetch(&(node->parent.ptr()->data32));
     const auto prefix = node->getPrefix();
     assert(prefix.size + 1 <= pos - first);
     const auto boff = bytes_offsets[node.type()];

@@ -19,13 +19,13 @@ namespace rts {
 namespace roart {
 
 class Tree final {
+public:
   struct Node;
   struct Node4;
   struct Node16;
   struct Node48;
   struct Node256;
 
-public:
   struct Node0;
 
   static Fact::Ref get(

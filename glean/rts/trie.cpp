@@ -556,7 +556,6 @@ struct Tree::Node0 {
   Node::Child at(int index) const;
   Node::Child find(unsigned char byte) const;
   Node::Child lower_bound(unsigned char byte) const;
-  unsigned char byteAt(int index) const;
 
   Tree::Node::Insert insert(
     Allocator& allocator,
@@ -592,7 +591,6 @@ struct Tree::Node4 {
   Node::Child at(int index) const;
   Node::Child find(unsigned char byte) const;
   Node::Child lower_bound(unsigned char byte) const;
-  unsigned char byteAt(int index) const;
 
   Tree::Node::Insert insert(
     Allocator& allocator,
@@ -626,7 +624,6 @@ struct Tree::Node16 {
   Node::Child at(int index) const;
   Node::Child find(unsigned char byte) const;
   Node::Child lower_bound(unsigned char byte) const;
-  unsigned char byteAt(int index) const;
 
   Node::Insert insert(
     Allocator& alocator,
@@ -661,7 +658,6 @@ struct Tree::Node48 {
   Node::Child at(int index) const;
   Node::Child find(unsigned char byte) const;
   Node::Child lower_bound(unsigned char byte) const;
-  unsigned char byteAt(int index) const;
 
   Node48() {
     std::fill(indices, indices+256, 0xff);
@@ -703,7 +699,6 @@ struct Tree::Node256 {
   Node::Child at(int index) const;
   Node::Child find(unsigned char byte) const;
   Node::Child lower_bound(unsigned char byte) const;
-  unsigned char byteAt(int index) const;
 
   Node::Insert insert(
     Allocator& allocator,
@@ -720,6 +715,27 @@ struct Tree::Node256 {
 
   void dump(std::ostream& s, int indent, const std::string& prefix) const;
 };
+
+namespace {
+
+constexpr size_t bytes_offsets[] = {
+  // N0
+  0,
+
+  // N4
+  offsetof(Tree::Node, spare),
+
+  // N16
+  offsetof(Tree::Node16, bytes),
+
+  //  N48
+  offsetof(Tree::Node48, bytes),
+
+  //  N256
+  0
+};
+
+}
 
 
 struct Tree::Allocator {
@@ -921,8 +937,12 @@ Fact::Ref Tree::get(
     const auto node = current.ptr();
     const auto prefix = node->getPrefix();
     assert(prefix.size + 1 <= pos - first);
+    const auto boff = bytes_offsets[node.type()];
+    const auto byte = boff == 0
+      ? index
+      : reinterpret_cast<const unsigned char *>(node.pointer())[boff+index];
     --pos;
-    *pos = Node::dispatch(node, [&](const auto *p) { return p->byteAt(index); });
+    *pos = byte;
     pos = node->prependPrefix(pos, first);
     current = node->parent;
   }
@@ -2084,31 +2104,6 @@ Tree::Node::Child Tree::Node256::at(int index) const {
   } else {
     return {};
   }
-}
-
-unsigned char Tree::Node0::byteAt(int) const {
-  assert(false);
-  return 0;
-}
-
-unsigned char Tree::Node4::byteAt(int index) const {
-  assert(index < 4 && children[index]);
-  return bytes()[index];
-}
-
-unsigned char Tree::Node16::byteAt(int index) const {
-  assert(index < 16 && children[index]);
-  return bytes[index];
-}
-
-unsigned char Tree::Node48::byteAt(int index) const {
-  assert(index < 48 && children[index]);
-  return bytes[index];
-}
-
-unsigned char Tree::Node256::byteAt(int index) const {
-  assert(index < 256 && children[index]);
-  return static_cast<unsigned char>(index);
 }
 
 /*

@@ -21,6 +21,7 @@
 #include <boost/intrusive/list.hpp>
 #include <boost/iterator/transform_iterator.hpp>
 #include <folly/container/F14Set.h>
+#include <folly/memory/Arena.h>
 #include <folly/Synchronized.h>
 
 namespace facebook {
@@ -78,6 +79,10 @@ struct FactByKeyOnly {
   static value_type get(const value_type& x) {
     return x;
   }
+
+  static value_type get(const Fact::Ref *ref) {
+    return ref->key();
+  }
 };
 
 template<typename By> struct EqualBy {
@@ -110,32 +115,104 @@ template<typename T, typename By> using FastSetBy =
 class FactSet final : public Define {
 private:
   class Facts final {
+  private:
+    Id starting_id;
+
+    static constexpr size_t ENTRIES_PER_PAGE = 256;
+    static constexpr size_t PAGE_SIZE = ENTRIES_PER_PAGE * sizeof(Fact::Ref);
+
+    struct Page {
+      Fact::Ref entries[ENTRIES_PER_PAGE];
+    };
+
+    std::vector<std::unique_ptr<Page>> pages;
+    size_t used = ENTRIES_PER_PAGE;
+    std::unique_ptr<folly::SysArena> arena;
+    size_t fact_memory = 0;
+
   public:
     explicit Facts(Id start) noexcept
-      : starting_id(start) {}
-    Facts(Facts&& other) noexcept
-      : starting_id(other.starting_id)
-      , facts(std::move(other.facts))
-      , fact_memory(other.fact_memory) {}
-    Facts& operator=(Facts&& other) noexcept {
-      starting_id = other.starting_id;
-      facts = std::move(other.facts);
-      fact_memory = other.fact_memory;
-      return *this;
-    }
+      : starting_id(start)
+      , arena(new folly::SysArena(folly::SysArena::kDefaultMinBlockSize, folly::SysArena::kNoSizeLimit, 1))
+      {}
+
+    Facts(Facts&& other) noexcept = default;
+    Facts& operator=(Facts&& other) noexcept = default;
 
     bool empty() const {
-      return facts.empty();
+      return pages.empty();
     }
 
     size_t size() const {
-      return facts.size();
+      return pages.size() * ENTRIES_PER_PAGE - (ENTRIES_PER_PAGE - used);
     }
 
     Id startingId() const {
       return starting_id;
     }
 
+    struct const_iterator : boost::iterator_facade<const_iterator, const Fact::Ref, boost::bidirectional_traversal_tag> {
+      std::vector<std::unique_ptr<Page>>::const_iterator page_iter;
+      const Fact::Ref *ref_iter;
+
+      const_iterator(
+        std::vector<std::unique_ptr<Page>>::const_iterator p,
+        const Fact::Ref *r) : page_iter(p), ref_iter(r) {}
+
+      const Fact::Ref& dereference() const {
+        return *ref_iter;
+      }
+
+      void increment() {
+        ++ref_iter;
+        // if ((reinterpret_cast<uintptr_t>(ref_iter) & (PAGE_SIZE-1)) == 0) {
+        if (ref_iter == (*page_iter)->entries + ENTRIES_PER_PAGE) {
+          ++page_iter;
+          ref_iter = (*page_iter)->entries;
+        }
+      }
+
+      void decrement() {
+        // if ((reinterpret_cast<uintptr_t>(ref_iter) & (PAGE_SIZE-1)) == 0) {
+        if (ref_iter == (*page_iter)->entries) {
+          --page_iter;
+          ref_iter = (*page_iter)->entries + ENTRIES_PER_PAGE - 1;
+        } else {
+          --ref_iter;
+        }
+      }
+
+      bool equal(const const_iterator& other) const {
+        return ref_iter == other.ref_iter;
+      }      
+    };
+
+    const_iterator begin() const {
+      return const_iterator(
+        pages.begin(),
+        pages.empty()
+          ? nullptr
+          : pages.front()->entries);
+    }
+
+    const_iterator end() const {
+      return pages.empty()
+        ? const_iterator(pages.end(), nullptr)
+        : const_iterator(
+            pages.end()-1,
+            pages.back()->entries + used);
+    }
+
+    const_iterator iter(size_t i) const {
+      const auto page = pages.begin() + i / ENTRIES_PER_PAGE;
+      return const_iterator(
+        page,
+        pages.empty()
+          ? nullptr
+          : (*page)->entries + (i % ENTRIES_PER_PAGE));
+    }
+
+    /*
     struct deref {
       Fact::Ref operator()(const Fact::unique_ptr& p) const {
         return p->ref();
@@ -154,35 +231,24 @@ private:
     const_iterator end() const {
       return boost::make_transform_iterator(facts.end(), deref());
     }
+    */
 
     Fact::Ref operator[](size_t i) const {
-      assert (i < facts.size());
-      return facts[i]->ref();
+      assert(i < size());
+      const auto page = i / ENTRIES_PER_PAGE;
+      const auto idx = i % ENTRIES_PER_PAGE;
+      return pages[page]->entries[idx];
     }
 
     void clear() {
-      facts.clear();
-      fact_memory = 0;
+      *this = Facts(starting_id);
     }
 
-    using Token = Fact::unique_ptr;
+    using Token = Fact::Ref *;
 
-    Token alloc(Id id, Pid type, Fact::Clause clause) {
-      return Fact::create({id, type, clause});
-    }
-
-    void commit(Token token) {
-      fact_memory += token->size();
-      facts.push_back(std::move(token));
-    }
-
-    void append(Facts other) {
-      facts.insert(
-        facts.end(),
-        std::make_move_iterator(other.facts.begin()),
-        std::make_move_iterator(other.facts.end()));
-      fact_memory += other.fact_memory;
-    }
+    Token alloc(Id id, Pid type, Fact::Clause clause);
+    void commit(Token token);
+    // void append(Facts other);
 
     /// Return the number of bytes occupied by facts.
     size_t factMemory() const noexcept {
@@ -190,11 +256,6 @@ private:
     }
 
     size_t allocatedMemory() const noexcept;
-
-  private:
-    Id starting_id;
-    std::vector<Fact::unique_ptr> facts;
-    size_t fact_memory = 0;
   };
 
 public:
@@ -228,14 +289,15 @@ public:
   /// Return iterator to the first fact with an id that's not less than the
   /// given id (or end() if no such fact exists).
   const_iterator lower_bound(Id id) const {
-    return begin() +
+
+    return facts.iter
       (id <= facts.startingId()
         ? 0
         : std::min(distance(facts.startingId(), id), facts.size()));
   }
 
   const_iterator upper_bound(Id id) const {
-    return begin() +
+    return facts.iter
       (id < facts.startingId()
         ? 0
         : std::min(distance(facts.startingId(), id)+1, facts.size()));
@@ -330,7 +392,7 @@ public:
 
 private:
   Facts facts;
-  DenseMap<Pid, FastSetBy<const Fact *, FactByKeyOnly>> keys;
+  DenseMap<Pid, FastSetBy<const Fact::Ref *, FactByKeyOnly>> keys;
 
   /// Cached predicate stats. We create these on-demand rather than maintain
   /// them throughout because most FactSets don't need them.

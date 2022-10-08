@@ -14,7 +14,7 @@ namespace rts {
 
 struct FactSet::Index {
   /// Type of index maps
-  using map_t = std::map<folly::ByteRange, const Fact *>;
+  using map_t = std::map<folly::ByteRange, const Fact::Ref *>;
 
   /// Type of index maps with synchronised access
   using entry_t = folly::Synchronized<map_t>;
@@ -34,6 +34,30 @@ struct FactSet::Index {
   folly::Synchronized<DenseMap<Pid, std::unique_ptr<entry_t>>> index;
 };
 
+FactSet::Facts::Token FactSet::Facts::alloc(Id id, Pid type, Fact::Clause clause) {
+  if (used == ENTRIES_PER_PAGE) {
+    pages.emplace_back(new Page);
+    used = 0;
+  }
+  Fact::Ref& ref = pages.back()->entries[used];
+  ref = Fact::Ref{id, type, clause};
+  return &ref;
+}
+
+void FactSet::Facts::commit(Token ref) {
+  assert(!pages.empty());
+  assert(ref == pages.back()->entries + used);
+  if (ref->clause.size() != 0) {
+    const auto buf = static_cast<unsigned char *>(arena->allocate(ref->clause.size()));
+    // CHECK(buf != nullptr) << "size: " << ref->clause.size();
+    assert(buf != nullptr);
+    std::memcpy(buf, ref->clause.data, ref->clause.size());
+    ref->clause.data = buf;
+  }
+  ++used;
+}
+
+
 FactSet::FactSet(Id start) : facts(start) {}
 FactSet::FactSet(FactSet&&) noexcept = default;
 FactSet& FactSet::operator=(FactSet&&) = default;
@@ -48,11 +72,10 @@ size_t FactSet::allocatedMemory() const noexcept {
 }
 
 size_t FactSet::Facts::allocatedMemory() const noexcept {
-  size_t n = facts.capacity() * sizeof(facts[0]);
-  for (const auto& fact : facts) {
-    n += fact->size();
-  }
-  return n;
+  return
+    pages.capacity() * sizeof(pages[0])
+    + pages.size() * PAGE_SIZE
+    + arena->totalSize();
 }
 
 struct FactSet::CachedPredicateStats {
@@ -75,7 +98,7 @@ PredicateStats FactSet::predicateStats() const {
     auto wlock = ulock.moveFromUpgradeToWrite();
     wlock->stats.reserve(keys.low_bound(), keys.high_bound());
     for (const auto& fact
-          : folly::range(facts.begin() + wlock->upto, facts.end())) {
+          : folly::range(facts.iter(wlock->upto), facts.end())) {
       wlock->stats[fact.type] += MemoryStats::one(fact.clause.size());
     }
     wlock->upto = facts.size();
@@ -89,7 +112,7 @@ Id FactSet::idByKey(Pid type, folly::ByteRange key) {
   if (const auto p = keys.lookup(type)) {
     const auto i = p->find(key);
     if (i != p->end()) {
-      return (*i)->id();
+      return (*i)->id;
     }
   }
   return Id::invalid();
@@ -197,7 +220,7 @@ std::unique_ptr<FactIterator> FactSet::seek(
     }
 
     Fact::Ref get(Demand) override {
-      return current != end ? current->second->ref() : Fact::Ref::invalid();
+      return current != end ? *(current->second) : Fact::Ref::invalid();
     }
 
     std::optional<Id> lower_bound() override { return std::nullopt; }
@@ -217,7 +240,7 @@ std::unique_ptr<FactIterator> FactSet::seek(
       entry.withWLock([&](auto& map) {
         if (map.size() != p->size()) {
           map.clear();
-          for (const Fact *fact : *p) {
+          for (const Fact::Ref *fact : *p) {
             map.insert({fact->key(), fact});
           }
         }
@@ -263,13 +286,13 @@ Id FactSet::define(Pid type, Fact::Clause clause, Id) {
   const auto next_id = firstFreeId();
   auto fact = facts.alloc(next_id, type, clause);
   auto& key_map = keys[type];
-  const auto r = key_map.insert(fact.get());
+  const auto r = key_map.insert(fact);
   if (r.second) {
     facts.commit(std::move(fact));
     return next_id;
   } else {
     return
-      fact->value() == (*r.first)->value() ? (*r.first)->id() : Id::invalid();
+      fact->value() == (*r.first)->value() ? (*r.first)->id : Id::invalid();
   }
 }
 
@@ -366,6 +389,11 @@ FactSet FactSet::rebase(
 }
 
 void FactSet::append(FactSet other) {
+  for (const auto fact : other) {
+    const auto id = define(fact.type, fact.clause);
+    assert(id == fact.id);
+  }
+  /*
   assert(appendable(other));
 
   facts.append(std::move(other.facts));
@@ -373,6 +401,7 @@ void FactSet::append(FactSet other) {
   keys.merge(std::move(other.keys), [](auto& left, const auto& right) {
     left.insert(right.begin(), right.end());
   });
+  */
 }
 
 bool FactSet::appendable(const FactSet& other) const {

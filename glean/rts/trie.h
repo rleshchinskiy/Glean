@@ -35,6 +35,7 @@ public:
   static folly::ByteRange value(const Node0 *node);
   struct FactInfo { Pid type; uint32_t key_size; uint32_t value_size; };
   static FactInfo info(const Node0 *node);
+  static Id id(const Node0 *node);
   static Pid type(const Node0 *node);
 
 private:

@@ -909,6 +909,10 @@ Tree::FactInfo Tree::info(const Tree::Node0 *leaf) {
   return {Allocator::leafPid(leaf), leaf->key_size(), leaf->value_size()};
 }
 
+Id Tree::id(const Tree::Node0 *leaf) {
+  return leaf->id;
+}
+
 Pid Tree::type(const Tree::Node0 *leaf) {
   return Allocator::leafPid(leaf);
 }

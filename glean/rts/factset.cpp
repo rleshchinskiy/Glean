@@ -345,7 +345,7 @@ Id FactSet::define(Pid type, Fact::Clause clause, Id) {
   } else {
     return
       // fact->value() == (*r.first)->value() ? (*r.first)->id() : Id::invalid();
-      clause.value() == roart::Tree::value(r.first) ? next_id : Id::invalid();
+      clause.value() == roart::Tree::value(r.first) ? roart::Tree::id(r.first) : Id::invalid();
   }
 }
 

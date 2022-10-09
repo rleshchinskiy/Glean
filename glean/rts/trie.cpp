@@ -415,8 +415,6 @@ struct Tree::Node {
     unsigned char payload[16];
   };
 
-  static constexpr size_t TAG_BITS = 2;
-
   enum class Tag : unsigned char {
     Short = 0x80,
     Sorted = 0x40,
@@ -469,11 +467,13 @@ struct Tree::Node {
     assert(real_size < 0x80000000Ul);
     assert(pfx.size <= real_size);
     if (real_size <= sizeof(prefix_bytes)) {
-      short_prefix_size = pfx.size << TAG_BITS;
+      short_prefix_size = pfx.size;
       std::memcpy(prefix_bytes, pfx.data, real_size);
+      tag(Tag::Short);
     } else {
-      prefix_size = (pfx.size << TAG_BITS) | 1;
+      prefix_size = pfx.size;
       prefix = pfx.data;
+      untag(Tag::Short);
     }
   }
 
@@ -508,10 +508,10 @@ struct Tree::Node {
       return Prefix{prefix, prefix_size >> TAG_BITS};
     }
     */
-   if ((prefix_size & 1) == 0) {
-    return Prefix{prefix_bytes, (prefix_size >> TAG_BITS) & (0xff >> TAG_BITS)};
+   if (tagged(Tag::Short)) {
+    return Prefix{prefix_bytes, short_prefix_size};
    } else {
-    return Prefix{prefix, prefix_size >> TAG_BITS};
+    return Prefix{prefix, prefix_size};
    }
   }
 
@@ -624,7 +624,7 @@ struct Tree::Node0 {
     if (!hasValue()) {
       return folly::ByteRange(node.prefix_bytes, size_t(0));
     } else {
-      const auto p = node.prefix + (node.prefix_size >> Tree::Node::TAG_BITS);
+      const auto p = node.prefix + node.prefix_size;
       return folly::ByteRange(p+4, folly::loadUnaligned<uint32_t>(p));
     }
   }
@@ -633,7 +633,7 @@ struct Tree::Node0 {
     if (!hasValue()) {
       return 0;
     } else {
-      const auto p = node.prefix + (node.prefix_size >> Tree::Node::TAG_BITS);
+      const auto p = node.prefix + node.prefix_size;
       return folly::loadUnaligned<uint32_t>(p);
     }
   }
@@ -997,6 +997,9 @@ NodeT *Tree::Node::cloneAs(Allocator& allocator, const Node& node) {
   auto clone = allocator.alloc<NodeT>();
   clone->node.setParent(node.parent());
   clone->node.setIndex(node.index());
+  if (node.tagged(Tag::Short)) {
+    clone->node.tag(Tag::Short);
+  }
   std::memcpy(clone->node.payload, node.payload, 16);
   return clone;
 }
@@ -1960,10 +1963,11 @@ void Tree::Node48::doSort() {
 
 void Tree::Node0::setClause(Allocator& allocator, Fact::Clause clause) {
   if (clause.key_size <= node.pfx_avail() && clause.value_size == 0) {
-    node.short_prefix_size = static_cast<unsigned char>(clause.key_size << Tree::Node::TAG_BITS);
+    node.short_prefix_size = static_cast<unsigned char>(clause.key_size);
     std::memcpy(node.prefix_bytes, clause.data, clause.key_size);
+    node.tag(Node::Tag::Short);
   } else {
-    node.prefix_size = (clause.key_size << Tree::Node::TAG_BITS) | 1;
+    node.prefix_size = clause.key_size;
     auto buf = allocator.allocate(clause.value_size == 0 ? clause.key_size : clause.size() + 4);
     node.prefix = buf;
     std::memcpy(buf, clause.data, clause.key_size);
@@ -1971,20 +1975,21 @@ void Tree::Node0::setClause(Allocator& allocator, Fact::Clause clause) {
       folly::storeUnaligned<uint32_t>(buf + clause.key_size, clause.value_size);
       std::memcpy(buf + clause.key_size + 4, clause.data + clause.key_size, clause.value_size);
     }
+    node.untag(Node::Tag::Short);
   }
 }
 
 void Tree::Node::shiftPrefix(uint32_t offset, Type type) {
-  const auto s = short_prefix_size;
-  if ((s&1) == 0) {
-    assert(offset <= (s >> TAG_BITS));
+  if (tagged(Tag::Short)) {
+    const auto s = short_prefix_size;
+    assert(offset <= short_prefix_size);
     unsigned __int128 x;
     std::memcpy(&x, &short_prefix_size, 12);
     x >>= offset*8;
     std::memcpy(&short_prefix_size, &x, 12);
-    short_prefix_size = s - (static_cast<unsigned char>(offset) << TAG_BITS);
+    short_prefix_size = s - static_cast<unsigned char>(offset);
   } else {
-    const auto old_size = prefix_size >> TAG_BITS;
+    const auto old_size = prefix_size;
     assert(offset <= old_size);
     const auto new_size = old_size - offset;
     if (new_size <= pfx_avail() && !(type == Type::N0 && reinterpret_cast<Node0*>(this)->hasValue())) {
@@ -1993,9 +1998,10 @@ void Tree::Node::shiftPrefix(uint32_t offset, Type type) {
       std::memcpy(&x, prefix + old_size - 12, 12);
       x >>= (11 - new_size)*8;
       std::memcpy(&short_prefix_size, &x, 12);
-      short_prefix_size = static_cast<unsigned char>(new_size) << TAG_BITS;
+      short_prefix_size = static_cast<unsigned char>(new_size);
+      tag(Tag::Short);
     } else {
-      prefix_size = (new_size << TAG_BITS) | 1;
+      prefix_size = new_size;
       prefix += offset;
     }
   }
@@ -2856,14 +2862,14 @@ void Tree::dump(std::ostream& s) const {
 }
 
 void Tree::Node::stats(ConstPtr node, Stats& s) {
-  if ((node->prefix_size & 1) != 0) {
-    s.data_used += (node->prefix_size >> TAG_BITS);
+  if (!node->tagged(Tag::Short)) {
+    s.data_used += node->prefix_size;
   }
   dispatch(node, [&](auto p) { p->stats(s); });
 }
 
 void Tree::Node0::stats(Stats& s) const {
-  if ((node.prefix_size & 1) != 0) {
+  if (!node.tagged(Node::Tag::Short)) {
     s.data_used += value_size();
   }
 }

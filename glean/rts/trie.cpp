@@ -270,6 +270,18 @@ struct Ptr48 {
   bool null() const {
     return (word << 16) == 0;
   }
+
+  static Ptr48<Ptr>* cast(Ptr* p) {
+    return reinterpret_cast<Ptr48<Ptr>*>(p);
+  }
+
+  static const Ptr48<Ptr>* cast(const Ptr* p) {
+    return reinterpret_cast<Ptr48<Ptr>*>(p);
+  }
+
+  uint64_t asWord() const {
+    return word;
+  }
 };
 
 }
@@ -525,7 +537,7 @@ struct Tree::Node {
   void seekTo(Iterator& iter, folly::ByteRange start) const;
 
   struct Insert {
-    Ptr * FOLLY_NULLABLE node;
+    Ptr48<Ptr> * FOLLY_NULLABLE node;
     union {
       const unsigned char *keypos;
       struct {
@@ -550,7 +562,7 @@ struct Tree::Node {
       return result;
     }
 
-    static Insert cont(Ptr *node, const unsigned char *keypos) {
+    static Insert cont(Ptr48<Ptr> *node, const unsigned char *keypos) {
       // __builtin_prefetch(&node->pointer()->prefix_size);
       Insert result;
       result.node = node;
@@ -561,7 +573,7 @@ struct Tree::Node {
 
   Insert insert(
     Allocator& alocator,
-    Ptr& me,
+    Ptr48<Ptr>& me,
     Fact::Clause Clause);
 
   static void validate(ConstPtr node);
@@ -645,7 +657,7 @@ struct Tree::Node0 {
 
   Tree::Node::Insert insert(
     Allocator& allocator,
-    Node::Ptr& me,
+    Ptr48<Node::Ptr>& me,
     Fact::Clause Clause);
 
   void sort() {}
@@ -662,10 +674,11 @@ struct Tree::Node0 {
 
 struct Tree::Node4 {
   Node node;
-  Node::Ptr children[4];
+  Ptr48<Node::Ptr> children[4];
 
   static constexpr Node::Type type = Node::Type::N4;
 
+  /*
   unsigned char *bytes() {
     return node.spare;
   }
@@ -673,6 +686,7 @@ struct Tree::Node4 {
   const unsigned char *bytes() const {
     return node.spare;
   }
+  */
 
 
   Node::Child at(int index) const;
@@ -681,7 +695,7 @@ struct Tree::Node4 {
 
   Tree::Node::Insert insert(
     Allocator& allocator,
-    Node::Ptr& me,
+    Ptr48<Node::Ptr>& me,
     Fact::Clause Clause);
 
   void doSort();
@@ -714,7 +728,7 @@ struct Tree::Node16 {
 
   Node::Insert insert(
     Allocator& alocator,
-    Node::Ptr& me,
+    Ptr48<Node::Ptr>& me,
     Fact::Clause Clause);
 
   void doSort();
@@ -753,7 +767,7 @@ struct Tree::Node48 {
 
   Node::Insert insert(
     Allocator& allocator,
-    Node::Ptr& me,
+    Ptr48<Node::Ptr>& me,
     Fact::Clause Clause);
 
   void doSort();
@@ -789,7 +803,7 @@ struct Tree::Node256 {
 
   Node::Insert insert(
     Allocator& allocator,
-    Node::Ptr& me,
+    Ptr48<Node::Ptr>& me,
     Fact::Clause Clause);
 
   void sort() {}
@@ -810,7 +824,8 @@ constexpr size_t bytes_offsets[] = {
   0,
 
   // N4
-  offsetof(Tree::Node, spare),
+  // offsetof(Tree::Node, spare),
+  offsetof(Tree::Node4, children) + 7,
 
   // N16
   offsetof(Tree::Node16, bytes),
@@ -819,6 +834,23 @@ constexpr size_t bytes_offsets[] = {
   offsetof(Tree::Node48, bytes),
 
   //  N256
+  0
+};
+
+constexpr unsigned char bytes_stride_bits[] = {
+  // N0
+  0,
+
+  // N4
+  3,
+
+  // N16
+  0,
+
+  // N48
+  0,
+
+  // N256
   0
 };
 
@@ -1034,9 +1066,11 @@ Fact::Ref Tree::get(
     const auto prefix = node->getPrefix();
     assert(prefix.size + 1 <= pos - first);
     const auto boff = bytes_offsets[node.type()];
+    const auto bstride = bytes_stride_bits[node.type()];
     const auto byte = boff == 0
       ? index
-      : reinterpret_cast<const unsigned char *>(node.pointer())[boff+index];
+      : reinterpret_cast<const unsigned char *>(node.pointer())
+          [boff+(index << bstride)];
     --pos;
     *pos = byte;
     pos = node->prependPrefix(pos, first);
@@ -1151,7 +1185,7 @@ uint32_t mismatch(
 FOLLY_ALWAYS_INLINE
 Tree::Node::Insert Tree::Node::insert(
     Allocator& allocator,
-    Ptr& me,
+    Ptr48<Ptr>& me,
     Fact::Clause clause) {
   const auto prefix = getPrefix();
   const auto m =
@@ -1166,7 +1200,7 @@ Tree::Node::Insert Tree::Node::insert(
     pre->node.setPrefix({prefix.data, m});
     const auto prefix_byte = prefix.data[m];
     const auto key_byte = clause.data[m];
-    shiftPrefix(m + 1, me.type());
+    shiftPrefix(m + 1, me.pointer().type());
     assert(clause.key_size >= m+1);
     clause.key_size -= m+1;
     clause.data += m+1;
@@ -1184,22 +1218,19 @@ Tree::Node::Insert Tree::Node::insert(
     setIndex(my_index);
     leaf->node.setParent(Node::ptr(pre));
     leaf->node.setIndex(leaf_index);
-    pre->bytes()[my_index] = prefix_byte;
-    pre->children[my_index] = me;
-    pre->bytes()[leaf_index] = key_byte;
-    pre->children[leaf_index] = Node::ptr(leaf);
-    pre->bytes()[2] = 0xff;
-    pre->bytes()[3] = 0xff;
-    pre->children[2] = Node::null;
-    pre->children[3] = Node::null;
-    assert(pre->bytes()[0] < pre->bytes()[1]);
-    me = ptr(pre);
+    pre->children[my_index] = Ptr48<Node::Ptr>(
+      me.pointer(), uint16_t(prefix_byte) << 8);
+    pre->children[leaf_index] = Ptr48<Node::Ptr>(
+      Node::ptr(leaf), uint16_t(key_byte) << 8);
+    pre->children[2] = Ptr48<Node::Ptr>(Node::null, 0xff00);
+    pre->children[3] = Ptr48<Node::Ptr>(Node::null, 0xff00);
+    me.setPointer(ptr(pre));
     return Insert::inserted(leaf);
   } else {
     assert(clause.key_size >= m);
     clause.key_size -= m;
     clause.data += m;
-    return dispatch(me, [&](auto node) {
+    return dispatch(me.pointer(), [&](auto node) {
       return node->insert(allocator, me, clause);
     });
   }
@@ -1354,6 +1385,19 @@ int bfind8y1(unsigned char byte, uint32_t data) {
     return eq == 0 ? 4 : __builtin_ctz(eq);
 }
 
+template<typename Ptr>
+int bfind4c(unsigned char byte, const Ptr48<Ptr> *ptrs) {
+    const auto x = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(ptrs));
+    const auto y = _mm256_set1_epi8(byte);
+    const auto eq = _mm256_movemask_pd(_mm256_cmpeq_epi8(y,x));
+    if (eq == 0) {
+        return 4;
+    }
+    return __builtin_ctz(eq);
+    // const auto eq = _mm256_movemask_pd(_mm256_cmpeq_epi8(y,x)) | 0x10;
+    // return __builtin_ctz(eq);
+}
+
 template<typename T>
 bool sorted(const unsigned char *bytes, const T *children, size_t n) {
   auto prev = *bytes;
@@ -1399,7 +1443,7 @@ unsigned char beq
 
 Tree::Node::Insert Tree::Node0::insert(
     Allocator& allocator,
-    Node::Ptr& me,
+    Ptr48<Node::Ptr>& me,
     Fact::Clause clause) {
   if (clause.key_size != 0) {
     error("existing key is prefix of inserted key");
@@ -1409,7 +1453,7 @@ Tree::Node::Insert Tree::Node0::insert(
 
 Tree::Node::Insert Tree::Node4::insert(
     Allocator& allocator,
-    Node::Ptr& me,
+    Ptr48<Node::Ptr>& me,
     Fact::Clause clause) {
   if (clause.key_size == 0) {
     error("inserted key is prefix of existing key");
@@ -1417,25 +1461,25 @@ Tree::Node::Insert Tree::Node4::insert(
   const auto byte = *clause.data;
   ++clause.data;
   --clause.key_size;
-  const auto eq = bfind8y1(byte, node.data32);
-  if (eq < 4 && children[eq]) {
+  // const auto eq = bfind8y1(byte, node.data32);
+  const auto eq = bfind4c(byte, children);
+  if (eq < 4 && !children[eq].null()) {
     return Node::Insert::cont(&children[eq], clause.data);
   } else {
     auto leaf = Node::newNode0(allocator, clause);
-    if (children[3] == Node::null) {
-      unsigned char index = children[2] == Node::null ? 2 : 3;
-      bytes()[index] = byte;
-      children[index] = Node::ptr(leaf);
+    if (children[3].null()) {
+      unsigned char index = children[2].null() ? 2 : 3;
+      children[index] = Ptr48<Node::Ptr>(Node::ptr(leaf), uint16_t(byte) << 8);
       leaf->node.setParent(Node::ptr(this));
       leaf->node.setIndex(index);
       node.untag(Tree::Node::Tag::Sorted);
     } else {
       auto c = Node::cloneAs<Node16>(allocator, node);
-      std::memcpy(c->bytes, bytes(), 4);
-      std::memcpy(c->children, children, 4 * sizeof(children[0]));
       for (auto i = 0; i < 4; ++i) {
-        // children[i]->parent = Node::Uplink(Node::ptr(c), i);
-        children[i]->setParent(Node::ptr(c));
+        const auto p = children[i];
+        p->setParent(Node::ptr(c));
+        c->bytes[i] = p.byte1();
+        c->children[i] = p.pointer();
       }
       c->bytes[4] = byte;
       c->children[4] = Node::ptr(leaf);
@@ -1443,7 +1487,7 @@ Tree::Node::Insert Tree::Node4::insert(
       leaf->node.setIndex(4);
       c->node.setCounter(5); // 0);
       allocator.free(this);
-      me = Node::ptr(c);
+      me.setPointer(Node::ptr(c));
     }
     return Node::Insert::inserted(leaf);
   }
@@ -1539,7 +1583,7 @@ Tree::Node::Insert Tree::Node4::insert(
 
 Tree::Node::Insert Tree::Node16::insert(
     Allocator& allocator,
-    Node::Ptr& me,
+    Ptr48<Node::Ptr>& me,
     Fact::Clause clause) {
   __builtin_prefetch(bytes);
   if (clause.key_size == 0) {
@@ -1553,7 +1597,7 @@ Tree::Node::Insert Tree::Node16::insert(
   const auto end = node.counter(); // + 5;
   if (eq < end) {
     assert(bytes[eq] == byte);
-    return Node::Insert::cont(&children[eq], clause.data);
+    return Node::Insert::cont(Ptr48<Node::Ptr>::cast(&children[eq]), clause.data);
   } else {
     auto leaf = Node::newNode0(allocator, clause);
     if (end < 16) {
@@ -1581,7 +1625,7 @@ Tree::Node::Insert Tree::Node16::insert(
       c->node.setCounter(17); // 0);
       c->indices[byte] = 16;
       allocator.free(this);
-      me = Node::ptr(c);
+      me.setPointer(Node::ptr(c));
     }
     return Node::Insert::inserted(leaf);
   }
@@ -1705,7 +1749,7 @@ Tree::Node::Insert Tree::Node16::insert(
 
 Tree::Node::Insert Tree::Node48::insert(
     Allocator& allocator,
-    Node::Ptr& me,
+    Ptr48<Node::Ptr>& me,
     Fact::Clause clause) {
   if (clause.key_size == 0) {
     error("inserted key is prefix of existing key");
@@ -1717,7 +1761,7 @@ Tree::Node::Insert Tree::Node48::insert(
   if (idx != 0xff) {
     assert(idx < node.counter()/* + 17 */);
     assert(bytes[idx] == byte);
-    return Node::Insert::cont(&children[idx], clause.data);
+    return Node::Insert::cont(Ptr48<Node::Ptr>::cast(&children[idx]), clause.data);
   } else {
     auto leaf = Node::newNode0(allocator, clause);
     const auto end = node.counter(); // + 17;
@@ -1742,7 +1786,7 @@ Tree::Node::Insert Tree::Node48::insert(
       leaf->node.setIndex(byte);
       c->children[byte] = Node::ptr(leaf);
       allocator.free(this);
-      me = Node::ptr(c);
+      me.setPointer(Node::ptr(c));
     }
     return Node::Insert::inserted(leaf);
   }
@@ -1785,7 +1829,7 @@ Tree::Node::Insert Tree::Node48::insert(
 
 Tree::Node::Insert Tree::Node256::insert(
     Allocator& allocator,
-    Node::Ptr& me,
+    Ptr48<Node::Ptr>& me,
     Fact::Clause clause) {
   if (clause.key_size == 0) {
     error("inserted key is prefix of existing key");
@@ -1794,7 +1838,7 @@ Tree::Node::Insert Tree::Node256::insert(
   ++clause.data;
   --clause.key_size;
   if (children[byte]) {
-    return Node::Insert::cont(&children[byte], clause.data);
+    return Node::Insert::cont(Ptr48<Node::Ptr>::cast(&children[byte]), clause.data);
   } else {
     auto leaf = Node::newNode0(allocator, clause);
     leaf->node.setParent(Node::ptr(this));
@@ -1815,37 +1859,25 @@ bool sort2(T& x, T& y) {
 }
 
 void Tree::Node4::doSort() {
-  unsigned char before[4];
-  std::memcpy(before, bytes(), 4);
-  if (children[2] == Node::null) {
-    if (node.spare[0] > node.spare[1]) {
-      std::swap(node.spare[0], node.spare[1]);
-      const auto c0 = children[1];
-      const auto c1 = children[0];
-      c0->setIndex(0);
-      c1->setIndex(1);
-      children[0] = c0;
-      children[1] = c1;
+  if (children[2].null()) {
+    if (children[0].asWord() > children[1].asWord()) {
+      std::swap(children[0], children[1]);
+      children[0]->setIndex(0);
+      children[1]->setIndex(1);
     }
-  } else if (children[3] == Node::null) {
-    uint16_t b0 = (uint16_t(node.spare[0]) << 8) | 0;
-    uint16_t b1 = (uint16_t(node.spare[1]) << 8) | 1;
-    uint16_t b2 = (uint16_t(node.spare[2]) << 8) | 2;
-    if (b0 > b1) {
-      std::swap(b0, b1);
+  } else if (children[3].null()) {
+    auto c0 = children[0];
+    auto c1 = children[1];
+    auto c2 = children[2];
+    if (c0.asWord() > c1.asWord()) {
+      std::swap(c0, c1);
     }
-    if (b1 > b2) {
-      std::swap(b1,b2);
+    if (c1.asWord() > c2.asWord()) {
+      std::swap(c1,c2);
     }
-    if (b0 > b1) {
-      std::swap(b0,b1);
+    if (c0.asWord() > c1.asWord()) {
+      std::swap(c0,c1);
     }
-    node.spare[0]= b0 >> 8;
-    node.spare[1]= b1 >> 8;
-    node.spare[2]= b2 >> 8;
-    const auto c0 = children[b0&0xff];
-    const auto c1 = children[b1&0xff];
-    const auto c2 = children[b2&0xff];
     c0->setIndex(0);
     c1->setIndex(1);
     c2->setIndex(2);
@@ -1853,35 +1885,26 @@ void Tree::Node4::doSort() {
     children[1] = c1;
     children[2] = c2;
   } else {
-    uint16_t b0 = (uint16_t(node.spare[0]) << 8) | 0;
-    uint16_t b1 = (uint16_t(node.spare[1]) << 8) | 1;
-    uint16_t b2 = (uint16_t(node.spare[2]) << 8) | 2;
-    uint16_t b3 = (uint16_t(node.spare[3]) << 8) | 3;
+    auto c0 = children[0];
+    auto c1 = children[1];
+    auto c2 = children[2];
+    auto c3 = children[3];
 
-    if (b0 > b1) {
-      std::swap(b0,b1);
+    if (c0.asWord() > c1.asWord()) {
+      std::swap(c0, c1);
     }
-    if (b2 > b3) {
-      std::swap(b2, b3);
+    if (c2.asWord() > c3.asWord()) {
+      std::swap(c2, c3);
     }
-    if (b0 > b2) {
-      std::swap(b0, b2);
+    if (c0.asWord() > c2.asWord()) {
+      std::swap(c0, c2);
     }
-    if (b1 > b3) {
-      std::swap(b1, b3);
+    if (c1.asWord() > c3.asWord()) {
+      std::swap(c1, c3);
     }
-    if (b1 > b2) {
-      std::swap(b1, b2);
+    if (c1.asWord() > c2.asWord()) {
+      std::swap(c1, c2);
     }
-
-    node.spare[0]= b0 >> 8;
-    node.spare[1]= b1 >> 8;
-    node.spare[2]= b2 >> 8;
-    node.spare[3]= b3 >> 8;
-    const auto c0 = children[b0&0xff];
-    const auto c1 = children[b1&0xff];
-    const auto c2 = children[b2&0xff];
-    const auto c3 = children[b3&0xff];
     c0->setIndex(0);
     c1->setIndex(1);
     c2->setIndex(2);
@@ -1987,7 +2010,7 @@ std::pair<const Tree::Node0 * FOLLY_NULLABLE, bool> Tree::insert(
     impl->root = Node::ptr(leaf);
     ins = Node::Insert::inserted(leaf);
   } else {
-    ins.node = &impl->root;
+    ins.node = Ptr48<Node::Ptr>::cast(&impl->root);
     ins.keypos = clause.data;
     while (ins.node != nullptr) {
       assert (ins.keypos - clause.data <= clause.key_size);
@@ -2183,8 +2206,8 @@ Tree::Node::Child Tree::Node0::at(int) const {
 }
 
 Tree::Node::Child Tree::Node4::at(int index) const {
-  if (index < 4 && children[index]) {
-    return {children[index], bytes()[index]};
+  if (index < 4 && !children[index].null()) {
+    return {children[index].pointer(), children[index].byte1()};
   } else {
     return {};
   }
@@ -2272,9 +2295,9 @@ Tree::Node::Child Tree::Node4::find(unsigned char byte) const {
   }
   */
 
-  const auto eq = bfind8y1(byte, node.data32);
+  const auto eq = bfind4c(byte, children);
   if (eq < 4) {
-    return {children[eq], static_cast<unsigned char>(eq)};
+    return {children[eq].pointer(), static_cast<unsigned char>(eq)};
   } else {
     return {};
   }
@@ -2366,18 +2389,19 @@ FOLLY_NOINLINE
 Tree::Node::Child Tree::Node4::lower_bound(unsigned char byte) const {
   assert(node.tagged(Tree::Node::Tag::Sorted));
   __builtin_prefetch(children);
-  if (byte <= bytes()[0]) {
-    return {children[0], bytes()[0]};
+  uint64_t w = uint64_t(byte) << 56;
+  if (w <= children[0].asWord()) {
+    return {children[0].pointer(),children[0].byte1()};
   }
-  if (byte <= bytes()[1]) {
-    return {children[1], bytes()[1]};
+  if (w <= children[1].asWord()) {
+    return {children[1].pointer(),children[1].byte1()};
   }
-  if (children[2] != Node::null) {
-    if (byte <= bytes()[2]) {
-      return {children[2], bytes()[2]};
+  if (!children[2].null()) {
+    if (w <= children[2].asWord()) {
+      return {children[2].pointer(),children[2].byte1()};
     }
-    if (children[3] != Node::null && byte <= bytes()[3]) {
-      return {children[3], bytes()[3]};
+    if (!children[3].null() && w <= children[3].asWord()) {
+      return {children[3].pointer(),children[3].byte1()};
     } 
   }
   return {};
@@ -2534,30 +2558,30 @@ void Tree::Node::validate(ConstPtr node, ConstPtr p, unsigned int i, unsigned in
 void Tree::Node0::validate() const {}
 
 void Tree::Node4::validate() const {
-  if (children[0] == Node::null || children[1] == Node::null) {
+  if (children[0].null() || children[1].null()) {
     LOG(ERROR) << "Node4::validate: too few children";
   }
   if (node.tagged(Tree::Node::Tag::Sorted)) {
-    auto b = bytes()[0];
-    for (auto i = 1; i < 4 && children[i]; ++i) {
-      if (bytes()[i] < b) {
+    auto b = children[0].byte1();
+    for (auto i = 1; i < 4 && !children[i].null(); ++i) {
+      if (children[i].byte1() < b) {
         LOG(ERROR) << "Node4::validate(sorted): not sorted";
         break;
-      } else if (bytes()[i] == b) {
+      } else if (children[i].byte1() == b) {
         LOG(ERROR) << "Node4::validate(sorted): duplicate";
         break;
       }
-      b = bytes()[i];
+      b = children[i].byte1();
     }
   } else {
-    if (bytes()[0] == bytes()[1]
-        || (children[2] != Node::null && (bytes()[0] == bytes()[2] || bytes()[1] == bytes()[2]))
-        || (children[3] != Node::null && (bytes()[0] == bytes()[3] || bytes()[1] == bytes()[3]) || bytes()[1] == bytes()[3])) {
+    if (children[0].byte1() == children[1].byte1()
+        || (!children[2].null() && (children[0].byte1() == children[2].byte1() || children[1].byte1() == children[2].byte1()))
+        || (!children[2].null() && (children[0].byte1() == children[3].byte1() || children[1].byte1() == children[3].byte1()|| children[2].byte1() == children[3].byte1()))) {
         LOG(ERROR) << "Node4::validate(unsorted): duplicate";
     }
   }
-  for (auto i = 0; i < 4 && children[i]; ++i) {
-    Node::validate(children[i], Node::ptr(this), i, bytes()[i]);
+  for (auto i = 0; i < 4 && !children[i].null(); ++i) {
+    Node::validate(children[i].pointer(), Node::ptr(this), i, children[i].byte1());
   }
 }
 
@@ -2672,34 +2696,25 @@ void Tree::Node0::keys(std::string& buf, std::vector<std::string>& v) const {
 
 void Tree::Node4::keys(std::string& buf, std::vector<std::string>& v) const {
   if (node.tagged(Tree::Node::Tag::Sorted)) {
-    for (auto i = 0; i < 4 && children[i]; ++i) {
-      buf.push_back(bytes()[i]);
-      Node::keys(children[i], buf, v);
+    for (auto i = 0; i < 4 && !children[i].null(); ++i) {
+      buf.push_back(children[i].byte1());
+      Node::keys(children[i].pointer(), buf, v);
       buf.pop_back();
     }
   } else {
-    struct {
-      unsigned char byte;
-      std::vector<std::string> keys;
-    } entries[4];
+    Ptr48<Node::Ptr> sorted[4];
     const auto end =
-      children[3] != Node::null ? 4 :
-      children[2] != Node::null ? 3 :
+      !children[3].null() ? 4 :
+      !children[2].null() ? 3 :
       2;
-    for (auto i = 0; i < end; ++i) {
-      entries[i].byte = bytes()[i];
-      buf.push_back(bytes()[i]);
-      Node::keys(children[i], buf, entries[i].keys);
-      buf.pop_back();
-    }
-    std::sort(entries, entries+end, [](const auto& x, const auto& y) {
-      return x.byte < y.byte;
+    std::memcpy(sorted, children, sizeof(children[0]) * end);
+    std::sort(sorted, sorted+end, [](auto c1, auto c2) {
+      return c1.asWord() < c2.asWord();
     });
     for (auto i = 0; i < end; ++i) {
-      v.insert(
-        v.end(),
-        std::make_move_iterator(entries[i].keys.begin()),
-        std::make_move_iterator(entries[i].keys.end())); 
+      buf.push_back(sorted[i].byte1());
+      Node::keys(sorted[i].pointer(), buf, v);
+      buf.pop_back();
     }
   }
 }
@@ -2797,9 +2812,9 @@ void Tree::Node0::dump(std::ostream& s, int indent, const std::string& prefix) c
 
 void Tree::Node4::dump(std::ostream& s, int indent, const std::string& prefix) const {
   s << spaces(indent) << "N4 " << prefix << std::endl;
-  for (auto i = 0; i < 4 && children[i]; ++i) {
-    s << spaces(indent+2) << binary::hex(bytes()[i]) << std::endl;
-    // Node::dump(children[i], s, indent+4);
+  for (auto i = 0; i < 4 && !children[i].null(); ++i) {
+    s << spaces(indent+2) << binary::hex(children[i].byte1()) << std::endl;
+    Node::dump(children[i].pointer(), s, indent+4);
   }
 }
 
@@ -2854,9 +2869,9 @@ void Tree::Node0::stats(Stats& s) const {
 }
 
 void Tree::Node4::stats(Stats& s) const {
-  for (auto i = 0; i < 4 && children[i]; ++i) {
+  for (auto i = 0; i < 4 && !children[i].null(); ++i) {
     ++s.node4.children;
-    Node::stats(children[i], s);
+    Node::stats(children[i].pointer(), s);
   }
 }
 

@@ -526,7 +526,11 @@ struct Tree::Node {
   template<typename NodeT>
   static NodeT *cloneAs(Allocator& allocator, const Node& node);
 
-  static Node0 *newNode0(Allocator& allocator, Fact::Clause clause);
+  static Node0 *newNode0(
+    Allocator& allocator,
+    Id id,
+    Fact::Clause clause,
+    uint32_t offset);
 
   struct Child {
     // const Node * FOLLY_NULLABLE node = nullptr;
@@ -539,7 +543,7 @@ struct Tree::Node {
   struct Insert {
     Ptr48<Ptr> * FOLLY_NULLABLE node;
     union {
-      const unsigned char *keypos;
+      uint32_t offset;
       struct {
         Node0 *leaf;
         bool fresh;
@@ -562,11 +566,11 @@ struct Tree::Node {
       return result;
     }
 
-    static Insert cont(Ptr48<Ptr> *node, const unsigned char *keypos) {
+    static Insert cont(Ptr48<Ptr> *node, uint32_t offset) {
       // __builtin_prefetch(&node->pointer()->prefix_size);
       Insert result;
       result.node = node;
-      result.keypos = keypos;
+      result.offset = offset;
       return result;
     }
   };
@@ -574,7 +578,9 @@ struct Tree::Node {
   Insert insert(
     Allocator& alocator,
     Ptr48<Ptr>& me,
-    Fact::Clause Clause);
+    Id id,
+    Fact::Clause Clause,
+    uint32_t offset);
 
   static void validate(ConstPtr node);
   static void validate(ConstPtr node, ConstPtr parent, unsigned int index, unsigned int byte);
@@ -594,20 +600,6 @@ const Tree::Node::Ptr Tree::Node::null;
 struct Tree::Node0 {
   Node node;
   Id id;
-  // uint32_t key_size;
-  // uint32_t value_size;
-
-  // static constexpr uint32_t HAS_VALUE_BIT = uint32_t(1) << 31;
-  // static constexpr uint32_t SIZE_MASK = HAS_VALUE_BIT - 1;
-
-  void set_sizes(Fact::Clause clause) {
-    // assert(clause.key_size < HAS_VALUE_BIT);
-    node.data32 = clause.key_size;
-    if (clause.value_size > 0) {
-      // node.data32 |= HAS_VALUE_BIT;
-      node.tag(Node::Tag::HasValue);
-    }
-  }
 
   uint32_t key_size() const {
     return node.data32; // & SIZE_MASK;
@@ -618,7 +610,7 @@ struct Tree::Node0 {
     return node.tagged(Node::Tag::HasValue);
   }
 
-  void setClause(Allocator& allocator, Fact::Clause clause);
+  void setFact(Allocator& allocator, Id id, Fact::Clause clause, uint32_t offset);
 
   folly::ByteRange value() const {
     if (!hasValue()) {
@@ -658,7 +650,9 @@ struct Tree::Node0 {
   Tree::Node::Insert insert(
     Allocator& allocator,
     Ptr48<Node::Ptr>& me,
-    Fact::Clause Clause);
+    Id id,
+    Fact::Clause clause,
+    uint32_t offset);
 
   void sort() {}
 
@@ -696,7 +690,9 @@ struct Tree::Node4 {
   Tree::Node::Insert insert(
     Allocator& allocator,
     Ptr48<Node::Ptr>& me,
-    Fact::Clause Clause);
+    Id id,
+    Fact::Clause clause,
+    uint32_t offset);
 
   void doSort();
   void sort() {
@@ -729,7 +725,9 @@ struct Tree::Node16 {
   Node::Insert insert(
     Allocator& alocator,
     Ptr48<Node::Ptr>& me,
-    Fact::Clause Clause);
+    Id id,
+    Fact::Clause clause,
+    uint32_t offset);
 
   void doSort();
   void sort() {
@@ -768,7 +766,9 @@ struct Tree::Node48 {
   Node::Insert insert(
     Allocator& allocator,
     Ptr48<Node::Ptr>& me,
-    Fact::Clause Clause);
+    Id id,
+    Fact::Clause clause,
+    uint32_t offset);
 
   void doSort();
   void sort() {
@@ -804,7 +804,9 @@ struct Tree::Node256 {
   Node::Insert insert(
     Allocator& allocator,
     Ptr48<Node::Ptr>& me,
-    Fact::Clause Clause);
+    Id id,
+    Fact::Clause clause,
+    uint32_t offset);
 
   void sort() {}
 
@@ -1004,18 +1006,13 @@ NodeT *Tree::Node::cloneAs(Allocator& allocator, const Node& node) {
   return clone;
 }
 
-Tree::Node0 *Tree::Node::newNode0(Allocator& allocator, Fact::Clause clause) {
+Tree::Node0 *Tree::Node::newNode0(
+    Allocator& allocator,
+    Id id,
+    Fact::Clause clause,
+    uint32_t offset) {
   auto node0 = allocator.alloc<Node0>();
-  node0->setClause(allocator, clause);
-  /*
-  auto buf = static_cast<unsigned char *>(
-    allocator.allocate(clause.size()));
-  if (clause.size() != 0) {
-    std::memcpy(buf, clause.data, clause.size());
-  }
-  node0->node.prefix = buf;
-  node0->node.prefix_size = clause.key_size;
-  */
+  node0->setFact(allocator, id, clause, offset);
   return node0;
 }
 
@@ -1189,12 +1186,18 @@ FOLLY_ALWAYS_INLINE
 Tree::Node::Insert Tree::Node::insert(
     Allocator& allocator,
     Ptr48<Ptr>& me,
-    Fact::Clause clause) {
+    Id id,
+    Fact::Clause clause,
+    uint32_t offset) {
+  assert(offset <= clause.key_size);
   const auto prefix = getPrefix();
-  const auto m =
-    mismatch(prefix.data, prefix.size, clause.data, clause.key_size);
+  const auto m = mismatch(
+    prefix.data,
+    prefix.size,
+    clause.data + offset,
+    clause.key_size - offset);
   if (m < prefix.size) {
-    if (m == clause.key_size) {
+    if (offset + m == clause.key_size) {
       error("inserted key is prefix of existing key");
     }
     auto pre = allocator.alloc<Node4>();
@@ -1202,12 +1205,10 @@ Tree::Node::Insert Tree::Node::insert(
     pre->node.setIndex(index());
     pre->node.setPrefix({prefix.data, m});
     const auto prefix_byte = prefix.data[m];
-    const auto key_byte = clause.data[m];
+    const auto key_byte = clause.data[offset + m];
     shiftPrefix(m + 1, me.pointer().type());
-    assert(clause.key_size >= m+1);
-    clause.key_size -= m+1;
-    clause.data += m+1;
-    auto leaf = newNode0(allocator, clause);
+    assert(offset + m < clause.key_size);
+    auto leaf = newNode0(allocator, id, clause, offset + m + 1);
     unsigned char my_index;
     unsigned char leaf_index;
     if (prefix_byte < key_byte) {
@@ -1230,11 +1231,9 @@ Tree::Node::Insert Tree::Node::insert(
     me.setPointer(ptr(pre));
     return Insert::inserted(leaf);
   } else {
-    assert(clause.key_size >= m);
-    clause.key_size -= m;
-    clause.data += m;
+    assert(offset + m <= clause.key_size);
     return dispatch(me.pointer(), [&](auto node) {
-      return node->insert(allocator, me, clause);
+      return node->insert(allocator, me, id, clause, offset + m);
     });
   }
 }
@@ -1447,8 +1446,10 @@ unsigned char beq
 Tree::Node::Insert Tree::Node0::insert(
     Allocator& allocator,
     Ptr48<Node::Ptr>& me,
-    Fact::Clause clause) {
-  if (clause.key_size != 0) {
+    Id id,
+    Fact::Clause clause,
+    uint32_t offset) {
+  if (offset != clause.key_size) {
     error("existing key is prefix of inserted key");
   }
   return Node::Insert::exists(this);
@@ -1457,19 +1458,19 @@ Tree::Node::Insert Tree::Node0::insert(
 Tree::Node::Insert Tree::Node4::insert(
     Allocator& allocator,
     Ptr48<Node::Ptr>& me,
-    Fact::Clause clause) {
-  if (clause.key_size == 0) {
+    Id id,
+    Fact::Clause clause,
+    uint32_t offset) {
+  if (offset == clause.key_size) {
     error("inserted key is prefix of existing key");
   }
-  const auto byte = *clause.data;
-  ++clause.data;
-  --clause.key_size;
-  // const auto eq = bfind8y1(byte, node.data32);
+  const auto byte = clause.data[offset];
+  ++offset;
   const auto eq = bfind4c(byte, children);
   if (eq < 4 && !children[eq].null()) {
-    return Node::Insert::cont(&children[eq], clause.data);
+    return Node::Insert::cont(&children[eq], offset);
   } else {
-    auto leaf = Node::newNode0(allocator, clause);
+    auto leaf = Node::newNode0(allocator, id, clause, offset);
     if (children[3].null()) {
       unsigned char index = children[2].null() ? 2 : 3;
       children[index] = Ptr48<Node::Ptr>(Node::ptr(leaf), uint16_t(byte) << 8);
@@ -1587,22 +1588,23 @@ Tree::Node::Insert Tree::Node4::insert(
 Tree::Node::Insert Tree::Node16::insert(
     Allocator& allocator,
     Ptr48<Node::Ptr>& me,
-    Fact::Clause clause) {
+    Id id,
+    Fact::Clause clause,
+    uint32_t offset) {
   __builtin_prefetch(bytes);
-  if (clause.key_size == 0) {
+  if (offset == clause.key_size) {
     error("inserted key is prefix of existing key");
   }
-  const auto byte = *clause.data;
-  ++clause.data;
-  --clause.key_size;
+  const auto byte = clause.data[offset];
+  ++offset;
 #if 1
   const auto eq = bfind16y(byte, bytes);
   const auto end = node.counter(); // + 5;
   if (eq < end) {
     assert(bytes[eq] == byte);
-    return Node::Insert::cont(Ptr48<Node::Ptr>::cast(&children[eq]), clause.data);
+    return Node::Insert::cont(Ptr48<Node::Ptr>::cast(&children[eq]), offset);
   } else {
-    auto leaf = Node::newNode0(allocator, clause);
+    auto leaf = Node::newNode0(allocator, id, clause, offset);
     if (end < 16) {
       bytes[end] = byte;
       children[end] = Node::ptr(leaf);
@@ -1753,20 +1755,21 @@ Tree::Node::Insert Tree::Node16::insert(
 Tree::Node::Insert Tree::Node48::insert(
     Allocator& allocator,
     Ptr48<Node::Ptr>& me,
-    Fact::Clause clause) {
-  if (clause.key_size == 0) {
+    Id id,
+    Fact::Clause clause,
+    uint32_t offset) {
+  if (offset == clause.key_size) {
     error("inserted key is prefix of existing key");
   }
-  const auto byte = *clause.data;
-  ++clause.data;
-  --clause.key_size;
+  const auto byte = clause.data[offset];
+  ++offset;
   const auto idx = indices[byte];
   if (idx != 0xff) {
     assert(idx < node.counter()/* + 17 */);
     assert(bytes[idx] == byte);
-    return Node::Insert::cont(Ptr48<Node::Ptr>::cast(&children[idx]), clause.data);
+    return Node::Insert::cont(Ptr48<Node::Ptr>::cast(&children[idx]), offset);
   } else {
-    auto leaf = Node::newNode0(allocator, clause);
+    auto leaf = Node::newNode0(allocator, id, clause, offset);
     const auto end = node.counter(); // + 17;
     if (end < 48) {
       indices[byte] = end;
@@ -1833,17 +1836,18 @@ Tree::Node::Insert Tree::Node48::insert(
 Tree::Node::Insert Tree::Node256::insert(
     Allocator& allocator,
     Ptr48<Node::Ptr>& me,
-    Fact::Clause clause) {
-  if (clause.key_size == 0) {
+    Id id,
+    Fact::Clause clause,
+    uint32_t offset) {
+  if (offset == clause.key_size) {
     error("inserted key is prefix of existing key");
   }
-  const auto byte = *clause.data;
-  ++clause.data;
-  --clause.key_size;
+  const auto byte = clause.data[offset];
+  ++offset;
   if (children[byte]) {
-    return Node::Insert::cont(Ptr48<Node::Ptr>::cast(&children[byte]), clause.data);
+    return Node::Insert::cont(Ptr48<Node::Ptr>::cast(&children[byte]), offset);
   } else {
-    auto leaf = Node::newNode0(allocator, clause);
+    auto leaf = Node::newNode0(allocator, id, clause, offset);
     leaf->node.setParent(Node::ptr(this));
     leaf->node.setIndex(byte);
     children[byte] = Node::ptr(leaf);
@@ -1961,19 +1965,34 @@ void Tree::Node48::doSort() {
   }
 }
 
-void Tree::Node0::setClause(Allocator& allocator, Fact::Clause clause) {
-  if (clause.key_size <= node.pfx_avail() && clause.value_size == 0) {
-    node.short_prefix_size = static_cast<unsigned char>(clause.key_size);
-    std::memcpy(node.prefix_bytes, clause.data, clause.key_size);
+void Tree::Node0::setFact(
+    Allocator& allocator,
+    Id id_,
+    Fact::Clause clause,
+    uint32_t offset) {
+  id = id_;
+  node.data32 = clause.key_size;
+  if (clause.value_size == 0) {
+    node.untag(Node::Tag::HasValue);
+  } else {
+    node.tag(Node::Tag::HasValue);
+  }
+  assert (offset <= clause.key_size);
+  const auto len = clause.key_size - offset;
+  if (len <= node.pfx_avail() && clause.value_size == 0) {
+    node.short_prefix_size = static_cast<unsigned char>(len);
+    std::memcpy(node.prefix_bytes, clause.data + offset, len);
     node.tag(Node::Tag::Short);
   } else {
-    node.prefix_size = clause.key_size;
-    auto buf = allocator.allocate(clause.value_size == 0 ? clause.key_size : clause.size() + 4);
+    node.prefix_size = len;
+    auto buf = allocator.allocate(clause.value_size == 0
+      ? len
+      : len + clause.value_size + 4);
     node.prefix = buf;
-    std::memcpy(buf, clause.data, clause.key_size);
+    std::memcpy(buf, clause.data + offset, len);
     if (clause.value_size != 0) {
-      folly::storeUnaligned<uint32_t>(buf + clause.key_size, clause.value_size);
-      std::memcpy(buf + clause.key_size + 4, clause.data + clause.key_size, clause.value_size);
+      folly::storeUnaligned<uint32_t>(buf + len, clause.value_size);
+      std::memcpy(buf + len + 4, clause.data + clause.key_size, clause.value_size);
     }
     node.untag(Node::Tag::Short);
   }
@@ -2011,27 +2030,24 @@ std::pair<const Tree::Node0 * FOLLY_NULLABLE, bool> Tree::insert(
     Id id, Fact::Clause clause) {
   Node::Insert ins;
   if (impl->root == Node::null) {
-    const auto leaf = Node::newNode0(impl->allocator, clause);
+    const auto leaf = Node::newNode0(impl->allocator, id, clause, 0);
     leaf->node.setParent(Node::null);
     impl->root = Node::ptr(leaf);
     ins = Node::Insert::inserted(leaf);
   } else {
     ins.node = Ptr48<Node::Ptr>::cast(&impl->root);
-    ins.keypos = clause.data;
+    ins.offset = 0;
     while (ins.node != nullptr) {
-      assert (ins.keypos - clause.data <= clause.key_size);
+      assert(ins.offset <= clause.key_size);
       ins = (*ins.node)->insert(
         impl->allocator,
         *ins.node,
-        Fact::Clause{
-          ins.keypos,
-          clause.key_size - static_cast<uint32_t>(ins.keypos - clause.data),
-          clause.value_size});
+        id,
+        clause,
+        ins.offset);
     }
   }
   if (ins.fresh) {
-    ins.leaf->id = id;
-    ins.leaf->set_sizes(clause);
     impl->max_key_size = std::max(impl->max_key_size, clause.key_size);
     impl->max_value_size = std::max(impl->max_value_size, clause.value_size);
     ++impl->count;

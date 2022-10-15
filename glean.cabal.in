@@ -1379,6 +1379,17 @@ executable factset-bench
         glean:test-lib,
         glean:util
 
+executable nat-benchmark
+    import: fb-cpp
+    if !flag(benchmarks)
+       buildable: False
+    main-is: glean/rts/tests/NatBenchmark.cpp
+    ghc-options: -no-hs-main
+    cxx-options: -DOSS=1
+    build-depends:
+        glean:rts
+    extra-libraries: follybenchmark
+
 -- -----------------------------------------------------------------------------
 -- Tests
 

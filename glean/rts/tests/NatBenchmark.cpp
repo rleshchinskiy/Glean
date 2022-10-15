@@ -8,7 +8,18 @@
 
 #include <iostream>
 
-#include <common/init/Init.h>
+#ifdef OSS
+#include <cpp/memory.h> // @manual
+#else
+#include <common/hs/util/cpp/memory.h>
+#endif
+
+#if FACEBOOK
+#include "common/init/Init.h"
+#else
+#include <folly/init/Init.h>
+#endif
+
 #include <folly/Benchmark.h>
 
 #include "glean/rts/binary.h"
@@ -121,7 +132,11 @@ BENCHMARK_NATS(SumNatsTrusted, value) {
 }
 
 int main(int argc, char** argv) {
+#if FACEBOOK
   facebook::initFacebook(&argc, &argv);
+#else
+  folly::init(&argc, &argv);
+#endif
   folly::runBenchmarks();
   return 0;
 }

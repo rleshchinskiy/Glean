@@ -153,6 +153,28 @@ inline constexpr size_t MAX_NAT_SIZE = 9;
 /// taken up by the encoding. This assumes that the buffer has enough space.
 size_t storeNat(unsigned char* out, uint64_t val);
 
+inline size_t storeNat_new_32(unsigned char *out, uint64_t val) {
+  if (val < 0x80) {
+    *out = static_cast<unsigned char>(val);
+    return 1;
+  } else if (val < 0x4080) {
+    folly::storeUnaligned<uint16_t>(out, (uint16_t(val) - 0x80) | 0x8000);
+    return 2;
+  } else {
+  const auto n = uint64_t(val) - 0x0102040810204080;
+  const auto w = n ^ ~0x0102040810204080;
+  const auto b0 = __builtin_clzl(w);
+  const auto i = b0/8;
+  const auto k = i*8;
+  const auto m = n << k;
+  const auto r = m & ~(1ul << (i+56));
+  const auto size = 8-i;
+  folly::storeUnaligned(out, folly::Endian::big(r));
+  return size;
+  }
+}
+size_t storeNat_new(unsigned char *out, uint64_t val);
+
 /// A stack-allocated encoded nat
 struct EncodedNat {
   explicit EncodedNat(uint64_t val) {

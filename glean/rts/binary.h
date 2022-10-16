@@ -360,6 +360,18 @@ struct Output {
     use(n);
   }
 
+  inline void nat_new_32(uint64_t x) {
+    auto p = alloc(8);
+    auto n = rts::storeNat_new_32(p, x);
+    use(n);
+  }
+
+  inline void nat_new(uint64_t x) {
+    auto p = alloc(9);
+    auto n = rts::storeNat_new(p, x);
+    use(n);
+  }
+
   // Write a fixed width number
   template <typename T>
   void fixed(T x) {

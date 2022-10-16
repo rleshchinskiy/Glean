@@ -289,6 +289,45 @@ size_t storeNat(unsigned char* out, uint64_t val) {
   }
 }
 
+#if 0
+size_t storeNat_new_32(unsigned char *out, uint32_t val) {
+  const auto n = uint64_t(val) - 0x0102040810204080;
+  const auto w = n ^ ~0x0102040810204080;
+  const auto b0 = __builtin_clzl(w);
+  const auto i = b0/8;
+  const auto k = i*8;
+  const auto m = n << k;
+  const auto r = m & ~(1ul << (i+56));
+  const auto size = 8-i;
+  folly::storeUnaligned(out, folly::Endian::big(r));
+  return size;
+}
+#endif
+
+size_t storeNat_new(unsigned char *out, uint64_t val) {
+  if (val < 0x80) {
+    *out = static_cast<unsigned char>(val);
+    return 1;
+  }
+  const auto n = val - 0x0102040810204080;
+  if (FOLLY_LIKELY(val < 0x0102040810204080)) {
+    const auto w = n ^ ~0x0102040810204080;
+  // if (((val | w) & 0x8000000000000000Ul) == 0) {
+    const auto b0 = __builtin_clzl(w);
+    const auto i = b0/8;
+    const auto k = i*8;
+    const auto m = n << k;
+    const auto r = m & ~(1ul << (i+56));
+    const auto size = 8-i;
+    folly::storeUnaligned(out, folly::Endian::big(r));
+    return size;
+  } else {
+    *out++ = 0xff;
+    folly::storeUnaligned(out, folly::Endian::big(n));
+    return 9;
+  }
+}
+
 } // namespace rts
 } // namespace glean
 } // namespace facebook

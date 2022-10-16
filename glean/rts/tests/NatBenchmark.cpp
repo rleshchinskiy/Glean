@@ -109,6 +109,42 @@ BENCHMARK_NATS(CopyNatsTrusted, value) {
   }
 }
 
+BENCHMARK_NATS(CopyNatsUntrusted_new_32, value) {
+  binary::Output out;
+  const auto count = value.untrustedNat();
+  out.nat(count);
+  for (size_t i = 0; i < count; ++i) {
+    out.nat_new_32(value.untrustedNat());
+  }
+}
+
+BENCHMARK_NATS(CopyNatsTrusted_new_32, value) {
+  binary::Output out;
+  const auto count = value.trustedNat();
+  out.nat(count);
+  for (size_t i = 0; i < count; ++i) {
+    out.nat_new_32(value.trustedNat());
+  }
+}
+
+BENCHMARK_NATS(CopyNatsUntrusted_new, value) {
+  binary::Output out;
+  const auto count = value.untrustedNat();
+  out.nat(count);
+  for (size_t i = 0; i < count; ++i) {
+    out.nat_new(value.untrustedNat());
+  }
+}
+
+BENCHMARK_NATS(CopyNatsTrusted_new, value) {
+  binary::Output out;
+  const auto count = value.trustedNat();
+  out.nat(count);
+  for (size_t i = 0; i < count; ++i) {
+    out.nat_new(value.trustedNat());
+  }
+}
+
 // Sum all nats - measures decoding speed
 //
 // FIXME: These two benchmarks seem to be affected by whatever code runs before

@@ -33,6 +33,83 @@ namespace rts {
 // themselves). Sets with folly's heterogenous key comparisons should use a
 // lot less memory per fact.
 
+struct CompressedFactPtr {
+  const unsigned char *ptr;
+
+  explicit CompressedFactPtr(const unsigned char *p) : ptr(p) {}
+
+  Id id() const {
+    const auto [w,_] = loadTrustedNat(ptr);
+    return Id::fromWord(w);
+  }
+
+  Pid type() const {
+    const auto p = skipTrustedNat(ptr);
+    const auto [w,_] = loadTrustedNat(p);
+    return Pid::fromWord(w);
+  }
+
+  Fact::Ref ref() const {
+    const auto [id,p1] = loadTrustedNat(ptr);
+    const auto [type,p2] = loadTrustedNat(p1);
+    const auto [key_size,p3] = loadTrustedNat(p2);
+    const auto [value_size,data] = loadTrustedNat(p3);
+    return Fact::Ref{
+      Id::fromWord(id),
+      Pid::fromWord(type),
+      Fact::Clause{
+        data,
+        static_cast<uint32_t>(key_size),
+        static_cast<uint32_t>(value_size)
+      }
+    };
+  }
+
+  template<typename Alloc>
+  static std::pair<CompressedFactPtr, unsigned char*> compress(Fact::Ref ref, Alloc&& alloc) {
+    const auto ptr = static_cast<unsigned char *>(alloc(
+      MAX_NAT_SIZE // id
+      + MAX_NAT_SIZE // type
+      + 5 // key_size
+      + 5 // value_size
+      + ref.clause.size()
+    ));
+
+    auto buf = ptr;
+    buf += storeNat(buf, ref.id.toWord());
+    buf += storeNat(buf, ref.type.toWord());
+    buf += storeNat(buf, ref.clause.key_size);
+    buf += storeNat(buf, ref.clause.value_size);
+    if (ref.clause.size() != 0) {
+      std::memcpy(buf, ref.clause.data, ref.clause.size());
+      buf += ref.clause.size();
+    }
+    return {CompressedFactPtr(ptr), buf};
+
+    /*
+    EncodedNat enc_id(ref.id.toWord());
+    EncodedNat enc_type(ref.type.toWord());
+    EncodedNat enc_key_size(ref.clause.key_size);
+    EncodedNat enc_value_size(ref.clause.value_size);
+    const auto ptr = static_cast<unsigned char *>(alloc(
+      enc_id.size()
+      + enc_type.size()
+      + enc_key_size.size()
+      + enc_value_size.size()
+      + ref.clause.size()));
+    auto buf = ptr;
+    buf += enc_id.store(buf);
+    buf += enc_type.store(buf);
+    buf += enc_key_size.store(buf);
+    buf += enc_value_size.store(buf);
+    if (ref.clause.size() != 0) {
+      std::memcpy(buf, ref.clause.data, ref.clause.size());
+    }
+    return CompressedFactPtr(ptr);
+    */
+  }
+};
+
 struct FactById {
   using value_type = Id;
 
@@ -83,6 +160,10 @@ struct FactByKeyOnly {
   static value_type get(const Fact::Ref *ref) {
     return ref->key();
   }
+
+  static value_type get(CompressedFactPtr p) {
+    return p.ref().key();
+  }
 };
 
 template<typename By> struct EqualBy {
@@ -118,141 +199,130 @@ private:
   private:
     Id starting_id;
 
-    static constexpr size_t ENTRIES_PER_PAGE = 256;
-    static constexpr size_t PAGE_SIZE = ENTRIES_PER_PAGE * sizeof(Fact::Ref);
+  private:
+    class Arena {
+    private:
+      /*
+      struct Page {
+        Page * FOLLY_NULLABLE prev;
+        unsigned char *data() {
+          return reinterpret_cast<unsigned char *>(this+1);
+        }
+      };
+      */
 
-    struct Page {
-      Fact::Ref entries[ENTRIES_PER_PAGE];
+      struct Page;
+
+      Page * FOLLY_NULLABLE current = nullptr;
+      unsigned char *buf = nullptr;
+      size_t avail = 0;
+      unsigned char *prev_buf = nullptr;
+      size_t prev_avail = 0;
+      Page * FOLLY_NULLABLE returned = nullptr;
+      size_t returned_size = 0;
+      size_t total = 0;
+      size_t used = 0;
+
+      static constexpr size_t DEFAULT_PAGE_SIZE = 4080;
+
+      void allocNewPage(size_t n);
+
+    public:
+      Arena() noexcept;
+      Arena(Arena&& other) noexcept;
+      Arena(const Arena& other) = delete;
+      Arena& operator=(Arena&& other) noexcept;
+      Arena& operator=(const Arena& other) = delete;
+      ~Arena() noexcept;
+
+      void clear() noexcept;
+
+      void *alloc(size_t n) {
+        void *p;
+        if (n > avail) {
+          allocNewPage(n);
+          assert(n <= avail);
+        }
+        p = buf;
+        buf += n;
+        avail -= n;
+        used += n;
+        return p;
+      }
+      void unalloc(const void *upto) noexcept;
+
+      size_t totalSize() const noexcept {
+        return total;
+      }
+
+      size_t usedSize() const noexcept {
+        return used;
+      }
     };
 
-    std::vector<std::unique_ptr<Page>> pages;
-    size_t used = ENTRIES_PER_PAGE;
-    std::unique_ptr<folly::SysArena> arena;
+    // std::unique_ptr<folly::SysArena> arena;
+    Arena arena;
+    std::vector<CompressedFactPtr> facts;
     size_t fact_memory = 0;
 
   public:
     explicit Facts(Id start) noexcept
       : starting_id(start)
-      , arena(new folly::SysArena(folly::SysArena::kDefaultMinBlockSize, folly::SysArena::kNoSizeLimit, 1))
       {}
 
     Facts(Facts&& other) noexcept = default;
     Facts& operator=(Facts&& other) noexcept = default;
 
     bool empty() const {
-      return pages.empty();
+      return facts.empty();
     }
 
     size_t size() const {
-      return pages.size() * ENTRIES_PER_PAGE - (ENTRIES_PER_PAGE - used);
+      return facts.size();
     }
 
     Id startingId() const {
       return starting_id;
     }
 
-    struct const_iterator : boost::iterator_facade<const_iterator, const Fact::Ref, boost::bidirectional_traversal_tag> {
-      std::vector<std::unique_ptr<Page>>::const_iterator page_iter;
-      const Fact::Ref *ref_iter;
+    Id firstFreeId() const {
+      return starting_id + size();
+    }
 
-      const_iterator(
-        std::vector<std::unique_ptr<Page>>::const_iterator p,
-        const Fact::Ref *r) : page_iter(p), ref_iter(r) {}
-
-      const Fact::Ref& dereference() const {
-        return *ref_iter;
-      }
-
-      void increment() {
-        ++ref_iter;
-        // if ((reinterpret_cast<uintptr_t>(ref_iter) & (PAGE_SIZE-1)) == 0) {
-        if (ref_iter == (*page_iter)->entries + ENTRIES_PER_PAGE) {
-          ++page_iter;
-          ref_iter = (*page_iter)->entries;
-        }
-      }
-
-      void decrement() {
-        // if ((reinterpret_cast<uintptr_t>(ref_iter) & (PAGE_SIZE-1)) == 0) {
-        if (ref_iter == (*page_iter)->entries) {
-          --page_iter;
-          ref_iter = (*page_iter)->entries + ENTRIES_PER_PAGE - 1;
-        } else {
-          --ref_iter;
-        }
-      }
-
-      bool equal(const const_iterator& other) const {
-        return ref_iter == other.ref_iter;
-      }      
-    };
+    using const_iterator = std::vector<CompressedFactPtr>::const_iterator;
 
     const_iterator begin() const {
-      return const_iterator(
-        pages.begin(),
-        pages.empty()
-          ? nullptr
-          : pages.front()->entries);
+      return facts.begin();
     }
 
     const_iterator end() const {
-      return pages.empty()
-        ? const_iterator(pages.end(), nullptr)
-        : const_iterator(
-            pages.end()-1,
-            pages.back()->entries + used);
+      return facts.end();
     }
 
     const_iterator iter(size_t i) const {
-      const auto page = pages.begin() + i / ENTRIES_PER_PAGE;
-      return const_iterator(
-        page,
-        pages.empty()
-          ? nullptr
-          : (*page)->entries + (i % ENTRIES_PER_PAGE));
-    }
-
-    /*
-    struct deref {
-      Fact::Ref operator()(const Fact::unique_ptr& p) const {
-        return p->ref();
-      }
-    };
-
-    using const_iterator =
-      boost::transform_iterator<
-        deref,
-        std::vector<Fact::unique_ptr>::const_iterator>;
-
-    const_iterator begin() const {
-      return boost::make_transform_iterator(facts.begin(), deref());
-    }
-
-    const_iterator end() const {
-      return boost::make_transform_iterator(facts.end(), deref());
-    }
-    */
-
-    Fact::Ref operator[](size_t i) const {
       assert(i < size());
-      const auto page = i / ENTRIES_PER_PAGE;
-      const auto idx = i % ENTRIES_PER_PAGE;
-      return pages[page]->entries[idx];
+      return facts.begin() + i;
+    }
+
+    CompressedFactPtr operator[](size_t i) const {
+      assert(i < size());
+      return facts[i];
     }
 
     void clear() {
       *this = Facts(starting_id);
     }
 
-    using Token = Fact::Ref *;
+    using Token = std::pair<CompressedFactPtr, unsigned char *>;
 
     Token alloc(Id id, Pid type, Fact::Clause clause);
     void commit(Token token);
+    void revert(Token token);
     // void append(Facts other);
 
     /// Return the number of bytes occupied by facts.
     size_t factMemory() const noexcept {
-      return arena->bytesUsed();
+      return arena.usedSize();
       // return fact_memory;
     }
 
@@ -329,7 +399,7 @@ public:
   }
 
   Id firstFreeId() const override {
-    return facts.startingId() + facts.size();
+    return facts.firstFreeId();
   }
 
   Interval count(Pid pid) const override;
@@ -396,7 +466,7 @@ public:
 
 private:
   Facts facts;
-  DenseMap<Pid, FastSetBy<const Fact::Ref *, FactByKeyOnly>> keys;
+  DenseMap<Pid, FastSetBy<CompressedFactPtr, FactByKeyOnly>> keys;
 
   /// Cached predicate stats. We create these on-demand rather than maintain
   /// them throughout because most FactSets don't need them.

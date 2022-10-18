@@ -7,6 +7,7 @@
  */
 
 #include "glean/rts/factset.h"
+#include <folly/system/MemoryMapping.h>
 
 namespace facebook {
 namespace glean {
@@ -34,24 +35,37 @@ struct FactSet::Index {
   folly::Synchronized<DenseMap<Pid, std::unique_ptr<entry_t>>> index;
 };
 
-struct FactSet::Facts::Arena::Page {
-  Page * FOLLY_NULLABLE prev;
-  unsigned char *data() {
-    return reinterpret_cast<unsigned char *>(this+1);
-  }
+struct FactSet::Facts::Arena::Impl {
+  std::vector<folly::MemoryMapping> pages;
 };
+
+void FactSet::Facts::Arena::destroy(Impl *impl) {
+  delete impl;
+}
 
 FactSet::Facts::Arena::Arena() noexcept {}
 
-FactSet::Facts::Arena::Arena(Arena&& other) noexcept {
-  std::memcpy(this, &other, sizeof(Arena));
-  std::memset(&other, 0, sizeof(Arena));
+FactSet::Facts::Arena::Arena(Arena&& other) noexcept
+  : impl(std::move(other.impl))
+  , buf(other.buf)
+  , avail(other.avail)
+  , total(other.total)
+  , used(other.used)
+{
+  other.buf = nullptr;
+  other.avail = 0;
+  other.total = 0;
+  other.used = 0;
 }
 
 FactSet::Facts::Arena& FactSet::Facts::Arena::operator=(Arena&& other) noexcept {
   clear();
-  std::memcpy(this, &other, sizeof(Arena));
-  std::memset(&other, 0, sizeof(Arena));
+  std::swap(impl,other.impl);
+  std::swap(buf,other.buf);
+  std::swap(avail,other.avail);
+  std::swap(total,other.total);
+  std::swap(used,other.used);
+  return *this;
 }
 
 FactSet::Facts::Arena::~Arena() noexcept {
@@ -59,64 +73,44 @@ FactSet::Facts::Arena::~Arena() noexcept {
 }
 
 void FactSet::Facts::Arena::clear() noexcept {
-  auto page = current;
-  while (page != nullptr) {
-    const auto prev = page->prev;
-    std::free(page);
-    page = prev;
-  }
-  std::free(returned);
-  std::memset(this, 0, sizeof(Arena));
+  impl.reset();
+  buf = nullptr;
+  avail = 0;
+  total = 0;
+  used = 0;
 }
 
 void FactSet::Facts::Arena::allocNewPage(size_t n) {
-  Page *page;
-  size_t size;
-  if (returned != nullptr && returned_size >= n) {
-    page = returned;
-    size = returned_size;
-    returned = nullptr;
-    returned_size = 0;
-  } else {
-    auto wanted = sizeof(Page) + n;
-    if (wanted > DEFAULT_PAGE_SIZE) {
-      wanted = DEFAULT_PAGE_SIZE + (wanted - DEFAULT_PAGE_SIZE) / 4096 * 4096 + 4096;
-    } else {
-      wanted = DEFAULT_PAGE_SIZE;
-    }
-    page = static_cast<Page *>(std::malloc(wanted));
-    size = wanted - sizeof(Page);
-    total += wanted;
+  if (!impl) {
+    impl.reset(new Impl());
   }
-  page->prev = current;
-  prev_buf = buf;
-  prev_avail = avail;
-  current = page;
-  buf = page->data();
-  avail = size;
+  const auto size = (n / DEFAULT_PAGE_SIZE + 1) * DEFAULT_PAGE_SIZE;
+  impl->pages.push_back(folly::MemoryMapping(
+    folly::MemoryMapping::kAnonymous,
+    size,
+    folly::MemoryMapping::Options().setWritable(true).setShared(false)));
+  const auto r = impl->pages.back().writableRange();
+  assert(r.size() >= n);
+  buf = r.data();
+  avail = r.size();
+  total += r.size();
 }
 
+size_t FactSet::Facts::Arena::totalSize() const noexcept {
+  return total + sizeof(Impl) + impl->pages.capacity() * sizeof(impl->pages[0]);
+}
+
+
 void FactSet::Facts::Arena::unalloc(const void *upto) noexcept {
-  assert(current != nullptr && upto >= current->data() && upto <= buf);
+  assert(impl);
+  assert(!impl->pages.empty());
+  assert(upto >= impl->pages.back().writableRange().data());
+  assert(upto <= impl->pages.back().writableRange().data() + impl->pages.back().writableRange().size());
   const auto diff = buf - static_cast<const unsigned char *>(upto);
   avail += diff;
   buf -= diff;
   assert(used >= diff);
   used -= diff;
-  if (buf == current->data() && prev_buf != nullptr) { 
-    if (returned != nullptr) {
-      std::free(returned);
-      assert(total >= returned_size + sizeof(Page));
-      total -= returned_size + sizeof(Page);
-    }
-    returned = current;
-    returned_size = avail;
-    current = current->prev;
-    buf = prev_buf;
-    avail = prev_avail;
-    prev_buf = nullptr;
-    prev_avail = 0;
-  }
 }
 
 FactSet::Facts::Token FactSet::Facts::alloc(Id id, Pid type, Fact::Clause clause) {

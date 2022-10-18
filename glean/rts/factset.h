@@ -211,19 +211,15 @@ private:
       };
       */
 
-      struct Page;
-
-      Page * FOLLY_NULLABLE current = nullptr;
+      struct Impl;
+      static void destroy(Impl *);
+      std::unique_ptr<Impl, folly::static_function_deleter<Impl, &destroy>> impl;
       unsigned char *buf = nullptr;
       size_t avail = 0;
-      unsigned char *prev_buf = nullptr;
-      size_t prev_avail = 0;
-      Page * FOLLY_NULLABLE returned = nullptr;
-      size_t returned_size = 0;
       size_t total = 0;
       size_t used = 0;
 
-      static constexpr size_t DEFAULT_PAGE_SIZE = 4080;
+      static constexpr size_t DEFAULT_PAGE_SIZE = 1 * 1024 * 1024;
 
       void allocNewPage(size_t n);
 
@@ -251,9 +247,9 @@ private:
       }
       void unalloc(const void *upto) noexcept;
 
-      size_t totalSize() const noexcept {
+      size_t totalSize() const noexcept; /* {
         return total;
-      }
+      } */
 
       size_t usedSize() const noexcept {
         return used;

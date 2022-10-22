@@ -8,6 +8,7 @@
 
 #include "glean/rts/factset.h"
 #include <folly/system/MemoryMapping.h>
+#include <sys/mman.h>
 
 namespace facebook {
 namespace glean {
@@ -36,7 +37,17 @@ struct FactSet::Index {
 };
 
 struct FactSet::Facts::Arena::Impl {
-  std::vector<folly::MemoryMapping> pages;
+  struct Mapping {
+    void *start;
+    size_t length;
+  };
+  std::vector<Mapping> pages;
+
+  ~Impl() noexcept {
+    for (const auto& p : pages) {
+      munmap(p.start, p.length);
+    }
+  }
 };
 
 void FactSet::Facts::Arena::destroy(Impl *impl) {
@@ -85,15 +96,39 @@ void FactSet::Facts::Arena::allocNewPage(size_t n) {
     impl.reset(new Impl());
   }
   const auto size = (n / DEFAULT_PAGE_SIZE + 1) * DEFAULT_PAGE_SIZE;
-  impl->pages.push_back(folly::MemoryMapping(
-    folly::MemoryMapping::kAnonymous,
+  if (!impl->pages.empty()) {
+    const auto new_length = impl->pages.back().length + size;
+    const auto r = mremap(
+      impl->pages.back().start,
+      impl->pages.back().length,
+      new_length,
+      0);
+    if (r != MAP_FAILED) {
+      LOG(INFO) << "remapped " << impl->pages.back().length
+        << " to " << new_length;
+      impl->pages.back().length = new_length;
+      avail += size;
+      total += size;
+      return;
+    } /* else {
+      LOG(INFO) << "couldn't remap " << impl->pages.back().length
+        << " to " << new_length << ": " << strerror(errno);
+    } */
+  }
+  const auto r = mmap(
+    nullptr,
     size,
-    folly::MemoryMapping::Options().setWritable(true).setShared(false)));
-  const auto r = impl->pages.back().writableRange();
-  assert(r.size() >= n);
-  buf = r.data();
-  avail = r.size();
-  total += r.size();
+    PROT_READ | PROT_WRITE,
+    MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE,
+    -1,
+    0);
+  if (r == MAP_FAILED) {
+    error("Couldn't mmap {} bytes: {}", size, strerror(errno));
+  }
+  impl->pages.push_back({r, size});
+  buf = static_cast<unsigned char *>(r);
+  avail = size;
+  total += size;
 }
 
 size_t FactSet::Facts::Arena::totalSize() const noexcept {
@@ -104,8 +139,8 @@ size_t FactSet::Facts::Arena::totalSize() const noexcept {
 void FactSet::Facts::Arena::unalloc(const void *upto) noexcept {
   assert(impl);
   assert(!impl->pages.empty());
-  assert(upto >= impl->pages.back().writableRange().data());
-  assert(upto <= impl->pages.back().writableRange().data() + impl->pages.back().writableRange().size());
+  assert(upto >= impl->pages.back().start);
+  assert(upto <= buf);
   const auto diff = buf - static_cast<const unsigned char *>(upto);
   avail += diff;
   buf -= diff;
